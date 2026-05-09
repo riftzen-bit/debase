@@ -65,19 +65,12 @@ export function Sidebar({ onOpenSettings, settingsActive }: Props) {
   const [edit, setEdit] = useState<EditState>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Keyboard shortcuts: focus search + new thread. Capture phase beats
-  // textarea/input handlers (e.g. macOS Ctrl+K killing the line otherwise).
-  // Both bindings honour `userData/keybindings.json` overrides.
+  // Keyboard shortcut: new thread in the current (or first) project. Capture
+  // phase beats textarea handlers. Honours `userData/keybindings.json`
+  // overrides via `effectiveKey`.
   const overrides = useShortcutOverrides();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (matchesKey(e, effectiveKey("search", "mod+k", overrides))) {
-        e.preventDefault();
-        e.stopPropagation();
-        searchRef.current?.focus();
-        searchRef.current?.select();
-        return;
-      }
       if (matchesKey(e, effectiveKey("newThread", "mod+shift+n", overrides))) {
         e.preventDefault();
         e.stopPropagation();

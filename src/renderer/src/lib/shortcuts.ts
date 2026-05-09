@@ -10,8 +10,7 @@ export type ShortcutBinding = {
 export const SHORTCUTS: ShortcutBinding[] = [
   { id: "settings", keys: "mod+,", description: "Toggle settings", scope: "global" },
   { id: "shortcuts", keys: "mod+/", description: "Show keyboard shortcuts", scope: "global" },
-  { id: "palette", keys: "mod+shift+p", description: "Command palette", scope: "global" },
-  { id: "search", keys: "mod+k", description: "Focus thread search", scope: "global" },
+  { id: "palette", keys: "mod+k", description: "Command palette", scope: "global" },
   { id: "newThread", keys: "mod+shift+n", description: "New thread in current project", scope: "global" },
   { id: "sidebar", keys: "mod+b", description: "Toggle sidebar", scope: "global" },
   { id: "stop", keys: "mod+.", description: "Stop running stream", scope: "chat" },

@@ -123,7 +123,17 @@ function Shell() {
   // `userData/keybindings.json` take precedence over the default specs.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (matchesKey(e, effectiveKey("palette", "mod+shift+p", overrides))) {
+      if (matchesKey(e, effectiveKey("palette", "mod+k", overrides))) {
+        e.preventDefault();
+        e.stopPropagation();
+        setPaletteOpen((v) => !v);
+        return;
+      }
+      // Hardcoded legacy alias: Ctrl/Cmd+Shift+P also opens the palette so VS
+      // Code muscle memory keeps working even after the primary key was moved
+      // to Ctrl/Cmd+K. Not configurable — anyone wanting to reassign should
+      // override the `palette` binding above.
+      if (matchesKey(e, "mod+shift+p")) {
         e.preventDefault();
         e.stopPropagation();
         setPaletteOpen((v) => !v);
@@ -249,7 +259,6 @@ function Shell() {
       {
         id: "search",
         label: "Focus thread search",
-        keys: "mod+k",
         icon: <SearchIcon size={13} />,
         onSelect: () => {
           setSidebarHidden(false);

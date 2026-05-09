@@ -1,6 +1,6 @@
 {
   "name": "debase",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "description": "Unified GUI shell for AI coding CLIs (Claude Code, Codex, OpenCode)",
   "type": "module",

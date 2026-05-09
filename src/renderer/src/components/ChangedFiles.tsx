@@ -1,7 +1,23 @@
 import { useMemo, useState, type ReactElement } from "react";
 import type { AssistantBlock, Thread } from "../state/types";
 import { FileIcon } from "../lib/fileIcons";
-import { ChevronDownIcon, ChevronRightIcon, DiffIcon, FolderIcon } from "./icons";
+import {
+  ChevronDownIcon,
+  ChevronRightIcon,
+  DiffIcon,
+  ExternalLinkIcon,
+  FolderIcon,
+} from "./icons";
+import {
+  DiffView,
+  buildEditDiff,
+  buildMultiEditDiff,
+  buildWriteDiff,
+} from "./DiffView";
+
+type ToolUseBlock = Extract<AssistantBlock, { kind: "tool_use" }>;
+type DiffLineKind = "add" | "del" | "context";
+type DiffLine = { kind: DiffLineKind; text: string };
 
 type Edit = { file: string; added: number; removed: number };
 
@@ -32,13 +48,30 @@ type Props = {
 export function ChangedFiles({ thread, cwd }: Props) {
   const [expanded, setExpanded] = useState(false);
   const [collapsedDirs, setCollapsedDirs] = useState<Record<string, boolean>>({});
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
 
   const summary = useMemo(() => buildSummary(thread, cwd), [thread.messages, cwd]);
+
+  // Re-derive the aggregate diff lines only when selection (or thread) changes.
+  // The diff is the concatenation of every Edit/Write/MultiEdit hunk that
+  // touched this file, in chronological order — same shape as a `git log -p`
+  // output limited to one file across the thread.
+  const selectedDiff = useMemo(() => {
+    if (!selectedFile) return null;
+    const blocks = collectBlocksForFile(thread, selectedFile, cwd);
+    if (blocks.length === 0) return null;
+    return aggregateDiffLines(blocks);
+  }, [selectedFile, thread.messages, cwd]);
 
   if (summary.files === 0) return null;
 
   const reveal = (p: string) => {
     void window.api.shell.openPath(p);
+  };
+
+  const onFileClick = (relativePath: string) => {
+    setSelectedFile((prev) => (prev === relativePath ? null : relativePath));
+    if (!expanded) setExpanded(true);
   };
 
   return (
@@ -73,11 +106,24 @@ export function ChangedFiles({ thread, cwd }: Props) {
               isRoot
               cwd={cwd}
               collapsed={collapsedDirs}
+              selectedFile={selectedFile}
               onToggleDir={(path) =>
                 setCollapsedDirs((prev) => ({ ...prev, [path]: !prev[path] }))
               }
+              onSelectFile={onFileClick}
               onReveal={reveal}
             />
+            {selectedFile && selectedDiff && (
+              <div className="mt-3 border-t border-rule/60 pt-3">
+                <DiffView filePath={selectedFile} lines={selectedDiff} />
+              </div>
+            )}
+            {selectedFile && !selectedDiff && (
+              <div className="mt-3 border-t border-rule/60 pt-3 px-3 py-2 text-[12px] italic text-ink-3">
+                No diff to show for this file — the agent may have only renamed
+                or read it.
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -91,7 +137,9 @@ function Tree({
   isRoot,
   cwd,
   collapsed,
+  selectedFile,
   onToggleDir,
+  onSelectFile,
   onReveal,
 }: {
   node: TreeNode;
@@ -99,29 +147,55 @@ function Tree({
   isRoot?: boolean;
   cwd?: string;
   collapsed: Record<string, boolean>;
+  selectedFile: string | null;
   onToggleDir: (path: string) => void;
+  onSelectFile: (path: string) => void;
   onReveal: (path: string) => void;
 }): ReactElement {
   if (node.kind === "file") {
     const absolute = resolveAbsolute(node.path, cwd);
+    const isSelected = selectedFile === node.path;
     return (
       <div
-        className="group flex items-center gap-2 rounded-sm py-0.5 pr-1 hover:bg-surface/50"
+        className={`group flex items-center gap-2 rounded-sm py-0.5 pr-1 transition-colors ${
+          isSelected
+            ? "bg-accent-soft/60"
+            : "hover:bg-surface/50"
+        }`}
         style={{ paddingLeft: 8 + depth * 14 }}
       >
-        <span className="shrink-0 text-ink-3">
+        <span
+          className={`shrink-0 ${isSelected ? "text-accent-deep" : "text-ink-3"}`}
+        >
           <FileIcon name={node.name} size={12} />
         </span>
         <button
           type="button"
-          onClick={() => onReveal(absolute)}
-          title={`Reveal ${absolute}`}
-          className="min-w-0 flex-1 truncate text-left font-mono text-[12px] text-ink hover:text-accent-deep"
+          onClick={() => onSelectFile(node.path)}
+          title={isSelected ? "Hide diff" : "Show diff"}
+          className={`min-w-0 flex-1 truncate text-left font-mono text-[12px] transition-colors ${
+            isSelected
+              ? "font-medium text-accent-deep"
+              : "text-ink hover:text-accent-deep"
+          }`}
         >
           {node.name}
         </button>
         <span className="shrink-0 font-mono text-[11px] text-add">+{node.added}</span>
         <span className="shrink-0 font-mono text-[11px] text-del">−{node.removed}</span>
+        <button
+          type="button"
+          onClick={(e) => {
+            // Stop the row from also toggling diff selection on icon click.
+            e.stopPropagation();
+            onReveal(absolute);
+          }}
+          title={`Reveal ${absolute}`}
+          aria-label={`Reveal ${node.name}`}
+          className="ml-1 shrink-0 rounded-sm p-0.5 text-ink-3 opacity-0 transition-opacity hover:bg-surface-2 hover:text-ink-2 group-hover:opacity-100 focus-visible:opacity-100"
+        >
+          <ExternalLinkIcon size={11} />
+        </button>
       </div>
     );
   }
@@ -159,7 +233,9 @@ function Tree({
               depth={isRoot ? depth : depth + 1}
               cwd={cwd}
               collapsed={collapsed}
+              selectedFile={selectedFile}
               onToggleDir={onToggleDir}
+              onSelectFile={onSelectFile}
               onReveal={onReveal}
             />
           ))}
@@ -196,6 +272,67 @@ function buildSummary(
   }
   const tree = buildTree(byFile);
   return { files: byFile.size, added: totalAdded, removed: totalRemoved, tree };
+}
+
+// Walk every assistant message in chronological order and pull out every
+// Edit/Write/MultiEdit tool_use whose `file_path` resolves to the same path
+// the user clicked in the tree. The order is the agent's own — we don't
+// re-sort, so the diff reads turn-by-turn the way it actually happened.
+function collectBlocksForFile(
+  thread: Thread,
+  relativePath: string,
+  cwd?: string,
+): ToolUseBlock[] {
+  const out: ToolUseBlock[] = [];
+  for (const m of thread.messages) {
+    if (m.role !== "assistant") continue;
+    for (const b of m.blocks) {
+      if (b.kind !== "tool_use") continue;
+      if (b.name !== "Edit" && b.name !== "Write" && b.name !== "MultiEdit") {
+        continue;
+      }
+      const input = b.input as Record<string, unknown> | null;
+      if (!input || typeof input.file_path !== "string") continue;
+      const rel = relativeToCwd(input.file_path, cwd);
+      if (rel === relativePath) out.push(b);
+    }
+  }
+  return out;
+}
+
+// Combine every block's diff into one DiffLine list, separating consecutive
+// hunks with a blank context row so the visual break between turns is clear
+// without reading like a syntax error.
+function aggregateDiffLines(blocks: ToolUseBlock[]): DiffLine[] {
+  const out: DiffLine[] = [];
+  for (const b of blocks) {
+    const partial = linesForBlock(b);
+    if (partial.length === 0) continue;
+    if (out.length > 0) out.push({ kind: "context", text: "" });
+    out.push(...partial);
+  }
+  return out;
+}
+
+function linesForBlock(b: ToolUseBlock): DiffLine[] {
+  const obj = b.input as Record<string, unknown> | null;
+  if (!obj) return [];
+  if (b.name === "Edit") {
+    const o = typeof obj.old_string === "string" ? obj.old_string : "";
+    const n = typeof obj.new_string === "string" ? obj.new_string : "";
+    return buildEditDiff(o, n);
+  }
+  if (b.name === "Write") {
+    const c = typeof obj.content === "string" ? obj.content : "";
+    return buildWriteDiff(c);
+  }
+  if (b.name === "MultiEdit") {
+    const edits = Array.isArray(obj.edits) ? obj.edits : [];
+    return buildMultiEditDiff(
+      edits as { old_string?: unknown; new_string?: unknown }[],
+    );
+  }
+  return [];
 }
 
 function extractEdits(block: Extract<AssistantBlock, { kind: "tool_use" }>): Edit[] {
