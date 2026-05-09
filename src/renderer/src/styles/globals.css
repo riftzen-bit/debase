@@ -1,0 +1,158 @@
+@import "tailwindcss";
+
+@import "@fontsource/geist-sans/300.css";
+@import "@fontsource/geist-sans/400.css";
+@import "@fontsource/geist-sans/500.css";
+@import "@fontsource/geist-sans/600.css";
+@import "@fontsource/jetbrains-mono/400.css";
+@import "@fontsource/jetbrains-mono/500.css";
+@import "highlight.js/styles/github.css";
+
+@theme {
+  --color-canvas: #faf7ef;
+  --color-surface: #f4f0e6;
+  --color-surface-2: #ebe6d8;
+  --color-rule: #e3ddcd;
+  --color-rule-strong: #cdc6b3;
+  --color-ink: #1c1a14;
+  --color-ink-2: #5b574c;
+  --color-ink-3: #8d877a;
+  --color-ink-4: #b6b0a3;
+  --color-accent: #a3621c;
+  --color-accent-deep: #7a4716;
+  --color-accent-soft: #f0e1c4;
+  --color-error: #a8331e;
+  --color-error-soft: #f4dad3;
+  --color-add: #4f7a35;
+  --color-add-soft: #e2ecd5;
+  --color-del: #a8331e;
+  --color-del-soft: #f4dad3;
+
+  --font-sans: "Geist Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "Cascadia Mono", "Consolas", monospace;
+}
+
+@utility drag-region {
+  -webkit-app-region: drag;
+}
+
+@utility no-drag {
+  -webkit-app-region: no-drag;
+}
+
+/*
+ * "ultrathink" easter-egg — when the user types "ultrathink" anywhere in the
+ * prompt the Claude Code CLI allocates max thinking budget. We surface that
+ * with a rotating conic-gradient halo around the composer and a hue-rotating
+ * Claude mark. Pure visual; no SDK option needed (the model itself reacts to
+ * the literal phrase in the user message).
+ */
+@property --ultra-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+@keyframes ultra-spin {
+  to {
+    --ultra-angle: 360deg;
+  }
+}
+
+@keyframes ultra-hue {
+  to {
+    filter: hue-rotate(360deg) saturate(1.1);
+  }
+}
+
+@keyframes ultra-glow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(217, 119, 87, 0.0);
+  }
+  50% {
+    box-shadow: 0 0 24px 2px rgba(217, 119, 87, 0.18);
+  }
+}
+
+@utility ultrathink-frame {
+  border: 1.5px solid transparent !important;
+  background:
+    linear-gradient(var(--color-canvas), var(--color-canvas)) padding-box,
+    conic-gradient(
+      from var(--ultra-angle),
+      #ff3b30,
+      #ff9500,
+      #ffd60a,
+      #34c759,
+      #00c7be,
+      #007aff,
+      #af52de,
+      #ff2d55,
+      #ff3b30
+    ) border-box !important;
+  animation:
+    ultra-spin 4s linear infinite,
+    ultra-glow 2.4s ease-in-out infinite;
+}
+
+@utility ultrathink-hue {
+  animation: ultra-hue 2.6s linear infinite;
+  filter: hue-rotate(0deg) saturate(1.1);
+}
+
+/*
+ * "dot-cycle" — replaces opacity-blink (`animate-pulse`) on the live "working"
+ * indicators with a smooth color-rotation. The dot stays fully visible the
+ * whole time; only its hue glides between four warm tones in the same family
+ * as the ochre accent, so the motion reads as activity without strobing.
+ * Three siblings can be staggered with `[animation-delay:...]`.
+ */
+@keyframes dot-cycle {
+  0%   { background-color: #a3621c; }
+  25%  { background-color: #c2872f; }
+  50%  { background-color: #d97757; }
+  75%  { background-color: #7a4716; }
+  100% { background-color: #a3621c; }
+}
+
+@utility dot-cycle {
+  animation: dot-cycle 2.4s ease-in-out infinite;
+  background-color: #a3621c;
+}
+
+@layer base {
+  *:focus-visible {
+    outline: 1.5px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-rule-strong);
+    border-radius: 9999px;
+    border: 3px solid var(--color-canvas);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-ink-3);
+  }
+
+  pre code.hljs {
+    background: transparent !important;
+    padding: 0 !important;
+  }
+
+  .hljs {
+    color: var(--color-ink);
+  }
+}
