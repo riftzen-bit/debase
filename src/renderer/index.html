@@ -2,7 +2,17 @@
 <html lang="en" class="bg-canvas">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; connect-src 'self' ws: http: https:;" />
+    <!--
+      Tight CSP. Renderer never talks to the network directly — everything
+      goes through main-process IPC — so connect-src drops the previous
+      `http: https:` wildcards. `ws:` is restricted to localhost so a
+      post-XSS exfil can't reach an attacker-controlled host. style-src
+      keeps `'unsafe-inline'` because JSX `style={{…}}` props compile to
+      inline style attributes, which is internal app code, not user input.
+      object-src/base-uri/form-action are added defensively against plugin
+      and base-tag injection vectors.
+    -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; connect-src 'self' ws://localhost:* ws://127.0.0.1:*; object-src 'none'; base-uri 'self'; form-action 'none';" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>debase</title>
   </head>

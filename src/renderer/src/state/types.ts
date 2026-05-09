@@ -1,5 +1,5 @@
 import type { ProviderId } from "@shared/providers";
-import type { RunConfig } from "@shared/chat";
+import type { RunConfig, RunMode } from "@shared/chat";
 
 export type AssistantBlock =
   | { kind: "text"; text: string }
@@ -25,6 +25,12 @@ export type AssistantMessage = {
   blocks: AssistantBlock[];
   createdAt: number;
   status: "streaming" | "done" | "error";
+  /**
+   * Run mode that produced this message. Captured at begin_stream so the UI
+   * can flag plan-mode replies even after the user has switched the mode for
+   * the next turn. Optional for backward compatibility with persisted state.
+   */
+  mode?: RunMode;
   costUsd?: number | null;
   turns?: number;
   durationMs?: number;
@@ -49,6 +55,11 @@ export type Thread = {
    */
   queuedPrompt?: string | null;
   /**
+   * In-progress composer text for this thread. Persisted so switching threads
+   * and returning preserves the draft. Cleared on successful submit.
+   */
+  draft?: string | null;
+  /**
    * Timestamp the thread was moved to the Archive section, or null/undefined
    * when active. Archived threads are hidden from the project listing and
    * surfaced only inside the Archive group at the bottom of the sidebar.
@@ -70,6 +81,18 @@ export type Project = {
 export type AppSettings = {
   defaults: RunConfig;
   enabledProviders: Record<ProviderId, boolean>;
+  /**
+   * Argv-style editor command used by the "open in editor" action. Tokens are
+   * split by whitespace (with quote-awareness) and the project path is
+   * appended as the final argument. Empty disables the action.
+   */
+  editorCommand?: string;
+  /**
+   * When true the SDK gates every tool call through a renderer prompt. The
+   * agent waits for an inline allow/deny click before each tool runs.
+   * Mode = bypassPermissions (full access) short-circuits this.
+   */
+  askBeforeTools?: boolean;
 };
 
 export type PendingInfo = {
@@ -77,6 +100,16 @@ export type PendingInfo = {
   threadId: string;
   assistantMsgId: string;
   startedAt: number;
+};
+
+export type PendingPermission = {
+  permId: string;
+  toolUseId: string;
+  toolName: string;
+  input: unknown;
+  threadId: string;
+  requestId: string;
+  decision?: "allow" | "deny";
 };
 
 export type AppState = {
@@ -90,6 +123,12 @@ export type AppState = {
    * `pendings[threadId]` is set.
    */
   pendings: Record<string, PendingInfo>;
+  /**
+   * Outstanding tool-call approvals keyed by `permId`. Populated by
+   * permission_request events and consumed when the user clicks allow/deny
+   * (or when the run is cancelled / completes).
+   */
+  pendingPermissions: Record<string, PendingPermission>;
 };
 
 export const DEFAULT_RUN_CONFIG: RunConfig = {
@@ -104,4 +143,6 @@ export const DEFAULT_RUN_CONFIG: RunConfig = {
 export const DEFAULT_SETTINGS: AppSettings = {
   defaults: DEFAULT_RUN_CONFIG,
   enabledProviders: { claude: true, codex: false, opencode: false },
+  editorCommand: "",
+  askBeforeTools: false,
 };

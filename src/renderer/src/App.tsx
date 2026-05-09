@@ -1,15 +1,29 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatPanel } from "./components/ChatPanel";
-import { ChevronLeftIcon, ChevronRightIcon } from "./components/icons";
+import {
+  ArchiveIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ComposeIcon,
+  FolderPlusIcon,
+  GearIcon,
+  SearchIcon,
+  StopIcon,
+} from "./components/icons";
 import { Sidebar } from "./components/Sidebar";
-import { Settings } from "./components/Settings";
+import { Settings, type SettingsCategory } from "./components/Settings";
 import { TitleBar } from "./components/TitleBar";
-import { StoreProvider } from "./state/store";
+import { CommandPalette, type PaletteAction } from "./components/CommandPalette";
+import { StoreProvider, useStore } from "./state/store";
+import { KeybindingsProvider, useShortcutOverrides } from "./state/keybindings";
+import { effectiveKey, matchesKey } from "./lib/shortcuts";
 
 export function App() {
   return (
     <StoreProvider>
-      <Shell />
+      <KeybindingsProvider>
+        <Shell />
+      </KeybindingsProvider>
     </StoreProvider>
   );
 }
@@ -39,9 +53,25 @@ function clampSidebar(n: number): number {
 }
 
 function Shell() {
+  const {
+    state,
+    cancelPrompt,
+    setThreadArchived,
+    selectThread,
+    newThread,
+    newProject,
+  } = useStore();
+  const overrides = useShortcutOverrides();
+
   const [view, setView] = useState<View>("chat");
-  const openSettings = () => setView("settings");
-  const closeSettings = () => setView("chat");
+  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("general");
+  const [paletteOpen, setPaletteOpen] = useState(false);
+
+  const openSettings = useCallback((category?: SettingsCategory) => {
+    if (category) setSettingsCategory(category);
+    setView("settings");
+  }, []);
+  const closeSettings = useCallback(() => setView("chat"), []);
 
   const [sidebarWidth, setSidebarWidth] = useState<number>(() =>
     clampSidebar(readNumber(SIDEBAR_WIDTH_KEY, SIDEBAR_DEFAULT)),
@@ -68,26 +98,88 @@ function Shell() {
     }
   }, [sidebarHidden]);
 
+  const selectedThreadId = state.selectedThreadId;
+  const selectedProjectId = state.selectedProjectId;
+  const projects = state.projects;
+  const pendings = state.pendings;
+
+  const switchThread = useCallback(
+    (delta: number) => {
+      const project = projects.find((p) => p.id === selectedProjectId);
+      if (!project) return;
+      const active = project.threads.filter((t) => !t.archivedAt);
+      if (active.length === 0) return;
+      const idx = selectedThreadId
+        ? active.findIndex((t) => t.id === selectedThreadId)
+        : -1;
+      const nextIdx = idx === -1 ? 0 : (idx + delta + active.length) % active.length;
+      selectThread(active[nextIdx].id);
+    },
+    [projects, selectedProjectId, selectedThreadId, selectThread],
+  );
+
   // Global shortcuts. Capture phase so they beat textarea/input handlers.
-  //   Ctrl/Cmd+,    — toggle Settings view
-  //   Ctrl/Cmd+B    — toggle sidebar visibility (matches VS Code / Cursor)
-  //   Esc           — when on Settings view, route back to chat
+  // Each binding consults `effectiveKey` so user overrides from
+  // `userData/keybindings.json` take precedence over the default specs.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (mod && !e.shiftKey && !e.altKey && (e.key === "," || e.code === "Comma")) {
+      if (matchesKey(e, effectiveKey("palette", "mod+shift+p", overrides))) {
+        e.preventDefault();
+        e.stopPropagation();
+        setPaletteOpen((v) => !v);
+        return;
+      }
+      if (matchesKey(e, effectiveKey("settings", "mod+,", overrides))) {
         e.preventDefault();
         e.stopPropagation();
         setView((v) => (v === "settings" ? "chat" : "settings"));
         return;
       }
-      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "b") {
+      if (matchesKey(e, effectiveKey("shortcuts", "mod+/", overrides))) {
+        e.preventDefault();
+        e.stopPropagation();
+        setSettingsCategory("shortcuts");
+        setView("settings");
+        return;
+      }
+      if (matchesKey(e, effectiveKey("sidebar", "mod+b", overrides))) {
         e.preventDefault();
         e.stopPropagation();
         setSidebarHidden((v) => !v);
         return;
       }
+      if (matchesKey(e, effectiveKey("stop", "mod+.", overrides))) {
+        if (selectedThreadId && pendings[selectedThreadId]) {
+          e.preventDefault();
+          e.stopPropagation();
+          void cancelPrompt(selectedThreadId);
+        }
+        return;
+      }
+      if (matchesKey(e, effectiveKey("archiveThread", "mod+w", overrides))) {
+        if (selectedThreadId) {
+          e.preventDefault();
+          e.stopPropagation();
+          setThreadArchived(selectedThreadId, true);
+        }
+        return;
+      }
+      const altUp = effectiveKey("prevThread", "alt+arrowup", overrides);
+      const altDown = effectiveKey("nextThread", "alt+arrowdown", overrides);
+      if (matchesKey(e, altUp) || matchesKey(e, altDown)) {
+        if (isEditableTarget(e.target)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        switchThread(matchesKey(e, altUp) ? -1 : 1);
+        return;
+      }
       if (e.key === "Escape") {
+        if (paletteOpen) {
+          e.preventDefault();
+          e.stopPropagation();
+          setPaletteOpen(false);
+          return;
+        }
         setView((v) => {
           if (v !== "settings") return v;
           e.preventDefault();
@@ -98,7 +190,109 @@ function Shell() {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, []);
+  }, [
+    selectedThreadId,
+    pendings,
+    cancelPrompt,
+    setThreadArchived,
+    switchThread,
+    paletteOpen,
+    overrides,
+  ]);
+
+  const paletteActions = useMemo<PaletteAction[]>(() => {
+    const projectId = selectedProjectId ?? projects[0]?.id ?? null;
+    const hasPending = selectedThreadId ? pendings[selectedThreadId] != null : false;
+    return [
+      {
+        id: "newThread",
+        label: "New thread",
+        hint: "In current project",
+        keys: "mod+shift+n",
+        icon: <ComposeIcon size={13} />,
+        disabled: !projectId,
+        onSelect: () => {
+          if (projectId) newThread(projectId);
+        },
+      },
+      {
+        id: "newProject",
+        label: "Add project…",
+        hint: "Pick a folder to anchor a new project",
+        icon: <FolderPlusIcon size={13} />,
+        onSelect: async () => {
+          const result = await window.api.dialog.chooseDirectory();
+          if (result.ok) newProject(deriveName(result.path), result.path);
+        },
+      },
+      {
+        id: "stop",
+        label: "Stop running stream",
+        hint: hasPending ? "Cancel the active turn" : "Nothing is running",
+        keys: "mod+.",
+        icon: <StopIcon size={13} />,
+        disabled: !hasPending,
+        onSelect: () => {
+          if (selectedThreadId) void cancelPrompt(selectedThreadId);
+        },
+      },
+      {
+        id: "archiveThread",
+        label: "Archive current thread",
+        keys: "mod+w",
+        icon: <ArchiveIcon size={13} />,
+        disabled: !selectedThreadId,
+        onSelect: () => {
+          if (selectedThreadId) setThreadArchived(selectedThreadId, true);
+        },
+      },
+      {
+        id: "search",
+        label: "Focus thread search",
+        keys: "mod+k",
+        icon: <SearchIcon size={13} />,
+        onSelect: () => {
+          setSidebarHidden(false);
+          window.setTimeout(() => {
+            const el = document.querySelector<HTMLInputElement>(
+              'aside input[placeholder^="Search"]',
+            );
+            el?.focus();
+            el?.select();
+          }, 0);
+        },
+      },
+      {
+        id: "sidebar",
+        label: "Toggle sidebar",
+        keys: "mod+b",
+        onSelect: () => setSidebarHidden((v) => !v),
+      },
+      {
+        id: "settings",
+        label: "Open settings",
+        keys: "mod+,",
+        icon: <GearIcon size={13} />,
+        onSelect: () => openSettings("general"),
+      },
+      {
+        id: "shortcuts",
+        label: "Show keyboard shortcuts",
+        keys: "mod+/",
+        onSelect: () => openSettings("shortcuts"),
+      },
+    ];
+  }, [
+    selectedProjectId,
+    projects,
+    selectedThreadId,
+    pendings,
+    newThread,
+    newProject,
+    cancelPrompt,
+    setThreadArchived,
+    openSettings,
+  ]);
 
   const gridStyle = sidebarHidden
     ? { gridTemplateColumns: "0px 1fr" }
@@ -107,7 +301,7 @@ function Shell() {
   return (
     <div className="grid h-full grid-rows-[36px_1fr] bg-canvas font-sans text-ink overflow-hidden">
       <TitleBar
-        onOpenSettings={openSettings}
+        onOpenSettings={() => openSettings()}
         settingsActive={view === "settings"}
         onToggleSidebar={() => setSidebarHidden((v) => !v)}
         sidebarHidden={sidebarHidden}
@@ -118,7 +312,7 @@ function Shell() {
             sidebarHidden ? "pointer-events-none invisible" : ""
           }`}
         >
-          <Sidebar onOpenSettings={openSettings} settingsActive={view === "settings"} />
+          <Sidebar onOpenSettings={() => openSettings()} settingsActive={view === "settings"} />
           {!sidebarHidden && (
             <SidebarResizeHandle
               width={sidebarWidth}
@@ -139,14 +333,36 @@ function Shell() {
             </button>
           )}
           {view === "settings" ? (
-            <Settings onClose={closeSettings} />
+            <Settings
+              onClose={closeSettings}
+              category={settingsCategory}
+              onCategoryChange={setSettingsCategory}
+            />
           ) : (
-            <ChatPanel onOpenSettings={openSettings} />
+            <ChatPanel onOpenSettings={() => openSettings()} />
           )}
         </div>
       </div>
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        actions={paletteActions}
+      />
     </div>
   );
+}
+
+function deriveName(path: string): string {
+  if (!path) return "Untitled";
+  const parts = path.replace(/[\\/]+$/, "").split(/[\\/]/);
+  return parts[parts.length - 1] || "Untitled";
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return true;
+  return target.isContentEditable;
 }
 
 function SidebarResizeHandle({

@@ -20,6 +20,7 @@ import {
   type AssistantMessage,
   type ChatMessage,
   type PendingInfo,
+  type PendingPermission,
   type Project,
   type Thread,
 } from "./types";
@@ -40,6 +41,7 @@ type Action =
   | { type: "update_thread_run_config"; threadId: string; runConfig: Partial<RunConfig> }
   | { type: "update_settings_defaults"; defaults: Partial<RunConfig> }
   | { type: "update_settings_provider"; provider: ProviderId; enabled: boolean }
+  | { type: "set_editor_command"; command: string }
   | { type: "append_user"; threadId: string; message: ChatMessage }
   | {
       type: "begin_stream";
@@ -53,7 +55,13 @@ type Action =
   | { type: "fail_pending"; threadId: string; assistantMsgId: string; error: string }
   | { type: "cancel_pending"; threadId: string }
   | { type: "enqueue_prompt"; threadId: string; text: string }
-  | { type: "clear_queue"; threadId: string };
+  | { type: "clear_queue"; threadId: string }
+  | { type: "set_thread_draft"; threadId: string; draft: string | null }
+  | { type: "set_ask_before_tools"; enabled: boolean }
+  | { type: "permission_pending"; permission: PendingPermission }
+  | { type: "permission_resolve"; permId: string; decision: "allow" | "deny" }
+  | { type: "permission_remove"; permId: string }
+  | { type: "permission_clear_request"; requestId: string };
 
 const initialState: AppState = {
   projects: [],
@@ -61,6 +69,7 @@ const initialState: AppState = {
   selectedThreadId: null,
   settings: DEFAULT_SETTINGS,
   pendings: {},
+  pendingPermissions: {},
 };
 
 function reducer(state: AppState, action: Action): AppState {
@@ -234,6 +243,12 @@ function reducer(state: AppState, action: Action): AppState {
         },
       };
 
+    case "set_editor_command":
+      return {
+        ...state,
+        settings: { ...state.settings, editorCommand: action.command },
+      };
+
     case "append_user":
       return {
         ...state,
@@ -337,6 +352,59 @@ function reducer(state: AppState, action: Action): AppState {
           queuedPrompt: null,
         })),
       };
+
+    case "set_thread_draft":
+      return {
+        ...state,
+        projects: mapThread(state.projects, action.threadId, (t) => ({
+          ...t,
+          draft: action.draft,
+        })),
+      };
+
+    case "set_ask_before_tools":
+      return {
+        ...state,
+        settings: { ...state.settings, askBeforeTools: action.enabled },
+      };
+
+    case "permission_pending":
+      return {
+        ...state,
+        pendingPermissions: {
+          ...state.pendingPermissions,
+          [action.permission.permId]: action.permission,
+        },
+      };
+
+    case "permission_resolve": {
+      const existing = state.pendingPermissions[action.permId];
+      if (!existing) return state;
+      // Keep the entry briefly with the decision so the UI can flash a
+      // confirmed state before unmounting.
+      return {
+        ...state,
+        pendingPermissions: {
+          ...state.pendingPermissions,
+          [action.permId]: { ...existing, decision: action.decision },
+        },
+      };
+    }
+
+    case "permission_remove": {
+      if (!(action.permId in state.pendingPermissions)) return state;
+      const next = { ...state.pendingPermissions };
+      delete next[action.permId];
+      return { ...state, pendingPermissions: next };
+    }
+
+    case "permission_clear_request": {
+      const next: typeof state.pendingPermissions = {};
+      for (const [permId, perm] of Object.entries(state.pendingPermissions)) {
+        if (perm.requestId !== action.requestId) next[permId] = perm;
+      }
+      return { ...state, pendingPermissions: next };
+    }
 
     default: {
       const _exhaustive: never = action;
@@ -459,6 +527,9 @@ type StoreContext = {
   updateThreadRunConfig: (threadId: string, runConfig: Partial<RunConfig>) => void;
   updateDefaultRunConfig: (defaults: Partial<RunConfig>) => void;
   setProviderEnabled: (provider: ProviderId, enabled: boolean) => void;
+  setEditorCommand: (command: string) => void;
+  setAskBeforeTools: (enabled: boolean) => void;
+  respondToPermission: (permId: string, decision: "allow" | "deny") => Promise<void>;
   /**
    * Send a prompt on the given thread (defaults to selectedThreadId). Returns
    * a status string so the caller knows whether to drop the draft or restore
@@ -481,6 +552,7 @@ type StoreContext = {
   enqueuePrompt: (text: string, threadId?: string) => void;
   clearQueue: (threadId: string) => void;
   cancelPrompt: (threadId?: string) => Promise<void>;
+  setThreadDraft: (threadId: string, draft: string | null) => void;
 };
 
 const Ctx = createContext<StoreContext | null>(null);
@@ -502,6 +574,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       dispatch({ type: "hydrate", state: persisted });
     }
     setHydrated(true);
+    // Tell main about the project paths the renderer has on disk so they
+    // pass the cwd allowlist check on first send. Idempotent in main —
+    // only honoured once per launch, so a later renderer compromise can't
+    // smuggle additional roots in without going through chooseDirectory.
+    const rootPaths = (persisted?.projects ?? [])
+      .map((p) => p.path)
+      .filter((p): p is string => typeof p === "string" && p.length > 0);
+    void window.api.project.bootstrapAllowlist(rootPaths);
   }, []);
 
   useEffect(() => {
@@ -511,6 +591,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const off = window.api.chat.onEvent((env) => {
+      // Permission events are out-of-band — they don't mutate the assistant
+      // message stream, so route them straight to the dedicated reducer
+      // cases instead of through `ipc_event`.
+      if (env.event.kind === "permission_request") {
+        dispatch({
+          type: "permission_pending",
+          permission: {
+            permId: env.event.permId,
+            toolUseId: env.event.toolUseId,
+            toolName: env.event.toolName,
+            input: env.event.input,
+            threadId: env.threadId,
+            requestId: env.requestId,
+          },
+        });
+        return;
+      }
+      if (env.event.kind === "permission_resolved") {
+        dispatch({
+          type: "permission_resolve",
+          permId: env.event.permId,
+          decision: env.event.decision,
+        });
+        return;
+      }
+
       dispatch({ type: "ipc_event", env });
       if (env.event.kind === "result" || env.event.kind === "error") {
         // Same stale-run guard as applyEvent: only finalise if the envelope's
@@ -524,6 +630,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
             threadId: env.threadId,
             requestId: env.requestId,
           });
+          // Pending approvals from a finished run are stale — drop them so
+          // the UI never shows orphaned allow/deny cards.
+          dispatch({ type: "permission_clear_request", requestId: env.requestId });
         }
       }
     });
@@ -639,6 +748,30 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "update_settings_provider", provider, enabled });
   }, []);
 
+  const setEditorCommand = useCallback((command: string) => {
+    dispatch({ type: "set_editor_command", command });
+  }, []);
+
+  const setAskBeforeTools = useCallback((enabled: boolean) => {
+    dispatch({ type: "set_ask_before_tools", enabled });
+  }, []);
+
+  const respondToPermission = useCallback(
+    async (permId: string, decision: "allow" | "deny") => {
+      // Optimistically mark the local card as resolved; the main process
+      // also broadcasts a permission_resolved event but that round-trip
+      // adds a perceptible delay if the SDK is busy.
+      dispatch({ type: "permission_resolve", permId, decision });
+      await window.api.chat.respondToPermission({ permId, decision });
+      // Drop the entry shortly after — keeping it visible for ~600ms gives
+      // the user a beat to see "allowed"/"denied" before it disappears.
+      window.setTimeout(() => {
+        dispatch({ type: "permission_remove", permId });
+      }, 600);
+    },
+    [],
+  );
+
   /**
    * Core send: append user message, dispatch begin_stream, fire IPC. Caller
    * is responsible for the pending guard. Used by both sendPrompt (with
@@ -668,6 +801,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         blocks: [],
         createdAt: Date.now(),
         status: "streaming",
+        mode: thread.runConfig.mode,
       };
 
       // Dispatch begin_stream BEFORE awaiting the IPC so any incoming events
@@ -689,6 +823,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           cwd: project.path || undefined,
           resumeSessionId: thread.sessionId,
           runConfig: thread.runConfig,
+          askBeforeTools: stateRef.current.settings.askBeforeTools === true,
         });
         if (!resp.ok) {
           dispatch({
@@ -732,6 +867,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (!pending) return;
     await window.api.chat.cancel({ requestId: pending.requestId });
     dispatch({ type: "cancel_pending", threadId });
+    dispatch({ type: "permission_clear_request", requestId: pending.requestId });
   }, []);
 
   const enqueuePrompt = useCallback((text: string, explicitThreadId?: string) => {
@@ -744,6 +880,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const clearQueue = useCallback((threadId: string) => {
     dispatch({ type: "clear_queue", threadId });
+  }, []);
+
+  const setThreadDraft = useCallback((threadId: string, draft: string | null) => {
+    dispatch({ type: "set_thread_draft", threadId, draft });
   }, []);
 
   const sendNow = useCallback(
@@ -801,11 +941,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       updateThreadRunConfig,
       updateDefaultRunConfig,
       setProviderEnabled,
+      setEditorCommand,
+      setAskBeforeTools,
+      respondToPermission,
       sendPrompt,
       sendNow,
       enqueuePrompt,
       clearQueue,
       cancelPrompt,
+      setThreadDraft,
     }),
     [
       state,
@@ -823,11 +967,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       updateThreadRunConfig,
       updateDefaultRunConfig,
       setProviderEnabled,
+      setEditorCommand,
+      setAskBeforeTools,
+      respondToPermission,
       sendPrompt,
       sendNow,
       enqueuePrompt,
       clearQueue,
       cancelPrompt,
+      setThreadDraft,
     ],
   );
 

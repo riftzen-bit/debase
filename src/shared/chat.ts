@@ -7,6 +7,22 @@ export type ChatEvent =
   | { kind: "tool_use"; id: string; name: string; input: unknown }
   | { kind: "tool_result"; toolUseId: string; output: string; isError: boolean }
   | {
+      kind: "permission_request";
+      /** Unique id used to correlate the renderer's allow/deny response. */
+      permId: string;
+      /** Maps to the tool_use block ID so the UI can render approval inline. */
+      toolUseId: string;
+      toolName: string;
+      input: unknown;
+      title?: string;
+      description?: string;
+    }
+  | {
+      kind: "permission_resolved";
+      permId: string;
+      decision: "allow" | "deny";
+    }
+  | {
       kind: "result";
       subtype: "success" | "error";
       costUsd: number | null;
@@ -15,6 +31,11 @@ export type ChatEvent =
       errorText?: string;
     }
   | { kind: "error"; message: string };
+
+export type PermissionResponseRequest = {
+  permId: string;
+  decision: "allow" | "deny";
+};
 
 export type ChatEventEnvelope = {
   threadId: string;
@@ -75,6 +96,12 @@ export type SendPromptRequest = {
   cwd?: string;
   resumeSessionId?: string | null;
   runConfig: RunConfig;
+  /**
+   * When true the SDK gates each tool call through `canUseTool`, which we
+   * bridge to the renderer over IPC so the user can allow/deny inline. False
+   * preserves the legacy auto-allow behaviour.
+   */
+  askBeforeTools?: boolean;
 };
 
 export type SendPromptResponse =
@@ -109,4 +136,59 @@ export type EnvironmentInfo = {
 export type ChooseDirectoryResponse =
   | { ok: true; path: string }
   | { ok: false; cancelled: true }
+  | { ok: false; error: string };
+
+export type ChooseFilesRequest = {
+  defaultPath?: string;
+  multi?: boolean;
+};
+
+export type ChooseFilesResponse =
+  | { ok: true; paths: string[] }
+  | { ok: false; cancelled: true }
+  | { ok: false; error: string };
+
+export type OpenInEditorRequest = {
+  /** Argv-style command. e.g. "code --wait" or just "subl". Path is appended last. */
+  editorCommand: string;
+  path: string;
+};
+
+export type OpenInEditorResponse =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export type ReadScriptsRequest = {
+  projectPath: string;
+};
+
+export type ReadScriptsResponse =
+  | {
+      ok: true;
+      manager: "bun" | "npm" | "pnpm" | "yarn";
+      scripts: { name: string; command: string }[];
+    }
+  | { ok: false; error: string };
+
+export type SaveImageRequest = {
+  /** Base64 payload (no data:URL prefix). */
+  base64: string;
+  /** File extension without the dot. e.g. "png", "jpg". */
+  extension: string;
+};
+
+export type SaveImageResponse =
+  | { ok: true; path: string }
+  | { ok: false; error: string };
+
+export type KeybindingsLoadResponse =
+  | { ok: true; overrides: Record<string, string>; path: string }
+  | { ok: false; error: string; path: string };
+
+export type KeybindingsSaveRequest = {
+  overrides: Record<string, string>;
+};
+
+export type KeybindingsSaveResponse =
+  | { ok: true; path: string }
   | { ok: false; error: string };

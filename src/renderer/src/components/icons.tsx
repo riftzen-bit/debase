@@ -443,3 +443,60 @@ export function DiffIcon(props: IconProps) {
     </svg>
   );
 }
+
+// File-type category glyphs. Hand-drawn 16×16 to match the rest of the icon
+// set. Used by `lib/fileIcons.ts` to render a tiny indicator next to file
+// rows in the Changed Files tree without resorting to a 1000-file vendored
+// VS Code icon pack.
+
+export function DocumentIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 2.5h6l2 2v9H4z" />
+      <path d="M10 2.5v3h2" />
+      <path d="M6 8h4M6 10h4M6 12h2.5" />
+    </svg>
+  );
+}
+
+export function CodeFileIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 2.5h6l2 2v9H4z" />
+      <path d="M10 2.5v3h2" />
+      <path d="m6 11-1.5-1.5L6 8M10 8l1.5 1.5L10 11" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function DataFileIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 2.5h6l2 2v9H4z" />
+      <path d="M10 2.5v3h2" />
+      <path d="M6 8c-.5 0-.5 1 0 1s.5 1 0 1M10 8c.5 0 .5 1 0 1s-.5 1 0 1" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function ImageFileIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 2.5h6l2 2v9H4z" />
+      <circle cx="6.5" cy="8" r="0.7" fill="currentColor" />
+      <path d="m4.5 12 2-2 2 1.5L11 8.5l1 1.5" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function StyleFileIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M4 2.5h6l2 2v9H4z" />
+      <path d="M10 2.5v3h2" />
+      <circle cx="6.5" cy="9.5" r="0.6" fill="currentColor" />
+      <circle cx="9" cy="8.5" r="0.6" fill="currentColor" />
+      <circle cx="9" cy="11" r="0.6" fill="currentColor" />
+    </svg>
+  );
+}

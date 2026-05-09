@@ -4,7 +4,19 @@ import type {
   CancelPromptRequest,
   ChatEventEnvelope,
   ChooseDirectoryResponse,
+  ChooseFilesRequest,
+  ChooseFilesResponse,
   EnvironmentInfo,
+  OpenInEditorRequest,
+  OpenInEditorResponse,
+  KeybindingsLoadResponse,
+  KeybindingsSaveRequest,
+  KeybindingsSaveResponse,
+  PermissionResponseRequest,
+  ReadScriptsRequest,
+  ReadScriptsResponse,
+  SaveImageRequest,
+  SaveImageResponse,
   SendPromptRequest,
   SendPromptResponse,
 } from "@shared/chat";
@@ -23,6 +35,9 @@ const api: DebaseApi = {
       ipcRenderer.on(IpcChannel.ChatEvent, handler);
       return () => ipcRenderer.removeListener(IpcChannel.ChatEvent, handler);
     },
+    respondToPermission(req: PermissionResponseRequest): Promise<void> {
+      return ipcRenderer.invoke(IpcChannel.ChatPermissionResponse, req);
+    },
   },
   env: {
     get(): Promise<EnvironmentInfo> {
@@ -33,10 +48,40 @@ const api: DebaseApi = {
     chooseDirectory(): Promise<ChooseDirectoryResponse> {
       return ipcRenderer.invoke(IpcChannel.DialogChooseDirectory);
     },
+    chooseFiles(req?: ChooseFilesRequest): Promise<ChooseFilesResponse> {
+      return ipcRenderer.invoke(IpcChannel.DialogChooseFiles, req);
+    },
   },
   shell: {
     openPath(path: string): Promise<void> {
       return ipcRenderer.invoke(IpcChannel.ShellOpenPath, path);
+    },
+    openInEditor(req: OpenInEditorRequest): Promise<OpenInEditorResponse> {
+      return ipcRenderer.invoke(IpcChannel.ShellOpenInEditor, req);
+    },
+  },
+  project: {
+    readScripts(req: ReadScriptsRequest): Promise<ReadScriptsResponse> {
+      return ipcRenderer.invoke(IpcChannel.ProjectReadScripts, req);
+    },
+    bootstrapAllowlist(paths: string[]): Promise<void> {
+      return ipcRenderer.invoke(IpcChannel.ProjectsBootstrap, paths);
+    },
+  },
+  attachments: {
+    saveImage(req: SaveImageRequest): Promise<SaveImageResponse> {
+      return ipcRenderer.invoke(IpcChannel.AttachmentsSaveImage, req);
+    },
+  },
+  keybindings: {
+    load(): Promise<KeybindingsLoadResponse> {
+      return ipcRenderer.invoke(IpcChannel.KeybindingsLoad);
+    },
+    save(req: KeybindingsSaveRequest): Promise<KeybindingsSaveResponse> {
+      return ipcRenderer.invoke(IpcChannel.KeybindingsSave, req);
+    },
+    revealFile(): Promise<void> {
+      return ipcRenderer.invoke(IpcChannel.KeybindingsRevealFile);
     },
   },
   window: {

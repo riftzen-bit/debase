@@ -1,7 +1,8 @@
 import { useState, type ReactNode } from "react";
 import type { AssistantBlock } from "../state/types";
+import { useStore } from "../state/store";
 import { truncate } from "../lib/format";
-import { AgentIcon, ChevronDownIcon, ChevronRightIcon, SparkleIcon } from "./icons";
+import { AgentIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, SparkleIcon } from "./icons";
 import { tryRenderDiff } from "./DiffView";
 
 type OpBlock = Exclude<AssistantBlock, { kind: "text" }>;
@@ -215,6 +216,11 @@ function OpRow({
   parentDone: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const { state, respondToPermission } = useStore();
+  const permission =
+    op.kind === "tool_use"
+      ? Object.values(state.pendingPermissions).find((p) => p.toolUseId === op.id) ?? null
+      : null;
 
   if (op.kind === "thinking") {
     return (
@@ -266,9 +272,16 @@ function OpRow({
           <span className="truncate font-mono text-[12px] text-ink-3">{summary}</span>
         )}
         <span className={`ml-auto font-mono text-[11px] italic ${statusTextClass(status)}`}>
-          {statusLabel(status)}
+          {permission && permission.decision == null ? "awaiting approval" : statusLabel(status)}
         </span>
       </button>
+      {permission && (
+        <ApprovalRow
+          permission={permission}
+          onAllow={() => void respondToPermission(permission.permId, "allow")}
+          onDeny={() => void respondToPermission(permission.permId, "deny")}
+        />
+      )}
       {open && (
         <div className="space-y-3 border-t border-rule/60 bg-canvas/60 px-4 py-3">
           {(() => {
@@ -302,6 +315,61 @@ function OpRow({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function ApprovalRow({
+  permission,
+  onAllow,
+  onDeny,
+}: {
+  permission: { permId: string; toolName: string; decision?: "allow" | "deny" };
+  onAllow: () => void;
+  onDeny: () => void;
+}) {
+  const decided = permission.decision != null;
+  return (
+    <div className="flex items-center gap-2 border-t border-rule/60 bg-accent-soft/20 px-4 py-2">
+      <span className="font-mono text-[11px] italic text-accent-deep">
+        approval needed
+      </span>
+      <span className="text-[11.5px] text-ink-2">
+        Allow Claude to run <span className="font-mono">{permission.toolName}</span>?
+      </span>
+      <div className="ml-auto flex items-center gap-1.5">
+        {decided ? (
+          <span
+            className={`inline-flex h-6 items-center gap-1 rounded-md px-2 font-mono text-[11px] ${
+              permission.decision === "allow"
+                ? "bg-accent-soft/70 text-accent-deep"
+                : "bg-error-soft/70 text-error"
+            }`}
+          >
+            {permission.decision === "allow" ? <CheckIcon size={10} /> : <CloseIcon size={10} />}
+            {permission.decision === "allow" ? "allowed" : "denied"}
+          </span>
+        ) : (
+          <>
+            <button
+              type="button"
+              onClick={onDeny}
+              className="inline-flex h-6 items-center gap-1 rounded-md border border-rule bg-canvas px-2 text-[11px] text-ink-2 transition-colors hover:border-error/60 hover:bg-error-soft/40 hover:text-error"
+            >
+              <CloseIcon size={10} />
+              Deny
+            </button>
+            <button
+              type="button"
+              onClick={onAllow}
+              className="inline-flex h-6 items-center gap-1 rounded-md border border-accent/50 bg-accent-soft/60 px-2 text-[11px] text-accent-deep transition-colors hover:border-accent/80 hover:bg-accent-soft"
+            >
+              <CheckIcon size={10} />
+              Allow
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

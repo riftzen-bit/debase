@@ -7,6 +7,8 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useStore } from "../state/store";
+import { useShortcutOverrides } from "../state/keybindings";
+import { effectiveKey, matchesKey } from "../lib/shortcuts";
 import { relativeTime, truncate } from "../lib/format";
 import type { Project, Thread } from "../state/types";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
@@ -63,20 +65,20 @@ export function Sidebar({ onOpenSettings, settingsActive }: Props) {
   const [edit, setEdit] = useState<EditState>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Keyboard shortcuts: Ctrl/Cmd+K focus search, Ctrl/Cmd+Shift+N new thread.
-  // Capture phase so we beat textarea/input handlers (e.g. macOS Ctrl+K
-  // killing line in a textarea would otherwise eat the event).
+  // Keyboard shortcuts: focus search + new thread. Capture phase beats
+  // textarea/input handlers (e.g. macOS Ctrl+K killing the line otherwise).
+  // Both bindings honour `userData/keybindings.json` overrides.
+  const overrides = useShortcutOverrides();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const mod = e.ctrlKey || e.metaKey;
-      if (mod && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+      if (matchesKey(e, effectiveKey("search", "mod+k", overrides))) {
         e.preventDefault();
         e.stopPropagation();
         searchRef.current?.focus();
         searchRef.current?.select();
         return;
       }
-      if (mod && e.shiftKey && !e.altKey && e.key.toLowerCase() === "n") {
+      if (matchesKey(e, effectiveKey("newThread", "mod+shift+n", overrides))) {
         e.preventDefault();
         e.stopPropagation();
         const id = state.selectedProjectId ?? state.projects[0]?.id ?? null;
@@ -85,7 +87,7 @@ export function Sidebar({ onOpenSettings, settingsActive }: Props) {
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [newThread, state.projects, state.selectedProjectId]);
+  }, [newThread, state.projects, state.selectedProjectId, overrides]);
 
   const visibleProjects = useMemo(
     () => filterAndSort(state.projects, search, sort),

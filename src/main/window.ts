@@ -2,6 +2,14 @@ import { BrowserWindow, shell } from "electron";
 import { join } from "node:path";
 import { broadcastMaximizeChange } from "./ipc";
 
+function appIconPath(): string {
+  // out/main/index.cjs lives two levels under the project root in dev and
+  // inside the asar in production — `resources/` sits at the same depth in
+  // both, so this single relative resolve works for both.
+  const file = process.platform === "win32" ? "icon.ico" : "tray.png";
+  return join(__dirname, "../../resources", file);
+}
+
 export function createMainWindow(): BrowserWindow {
   console.log("[debase] createMainWindow start");
   const win = new BrowserWindow({
@@ -13,6 +21,7 @@ export function createMainWindow(): BrowserWindow {
     center: true,
     autoHideMenuBar: true,
     backgroundColor: "#faf7ef",
+    icon: appIconPath(),
     titleBarStyle: process.platform === "darwin" ? "hiddenInset" : "hidden",
     titleBarOverlay:
       process.platform === "win32"
@@ -24,7 +33,12 @@ export function createMainWindow(): BrowserWindow {
         : undefined,
     webPreferences: {
       preload: join(__dirname, "../preload/index.cjs"),
-      sandbox: false,
+      // sandbox: true means the renderer process gets full OS sandboxing
+      // (chromium-style) and the preload script only sees the limited
+      // Electron APIs whitelisted for sandboxed preloads. Our preload
+      // imports nothing else — verified via grep — so the bridge keeps
+      // working while a renderer XSS no longer has Node primitives at all.
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -58,8 +72,12 @@ export function createMainWindow(): BrowserWindow {
   win.on("unmaximize", () => broadcastMaximizeChange(win.webContents, false));
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      shell.openExternal(url);
+    // Only forward navigations to the OS that we're confident the user
+    // expects: https sites and mailto links. http:// is dropped because
+    // we don't want to act as a redirector to insecure pages, and
+    // anything more exotic (file:, data:, javascript:) is silently denied.
+    if (url.startsWith("https://") || url.startsWith("mailto:")) {
+      void shell.openExternal(url);
     }
     return { action: "deny" };
   });

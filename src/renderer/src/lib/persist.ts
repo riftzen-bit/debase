@@ -40,8 +40,12 @@ export function load(): AppState | null {
 
 export function save(value: AppState): void {
   try {
-    // Pending is in-flight runtime state — never persist it.
-    localStorage.setItem(KEY_V2, JSON.stringify({ ...value, pendings: {} }));
+    // Pending streams + pending approvals are in-flight runtime state — never
+    // persist them; reloading the app would otherwise resurrect ghost cards.
+    localStorage.setItem(
+      KEY_V2,
+      JSON.stringify({ ...value, pendings: {}, pendingPermissions: {} }),
+    );
   } catch {
     // localStorage full / disabled — swallow.
   }
@@ -59,8 +63,17 @@ function reconcile(parsed: Partial<AppState>): AppState {
         ...DEFAULT_SETTINGS.enabledProviders,
         ...(parsed.settings?.enabledProviders ?? {}),
       },
+      editorCommand:
+        typeof parsed.settings?.editorCommand === "string"
+          ? parsed.settings.editorCommand
+          : DEFAULT_SETTINGS.editorCommand,
+      askBeforeTools:
+        typeof parsed.settings?.askBeforeTools === "boolean"
+          ? parsed.settings.askBeforeTools
+          : DEFAULT_SETTINGS.askBeforeTools,
     },
     pendings: {},
+    pendingPermissions: {},
   };
 }
 
@@ -140,6 +153,7 @@ function migrateFromV1(v1: V1State): AppState {
       selectedThreadId: null,
       settings: DEFAULT_SETTINGS,
       pendings: {},
+      pendingPermissions: {},
     };
   }
   const project: Project = {
@@ -184,5 +198,6 @@ function migrateFromV1(v1: V1State): AppState {
     selectedThreadId: project.threads[0]?.id ?? null,
     settings: DEFAULT_SETTINGS,
     pendings: {},
+    pendingPermissions: {},
   };
 }

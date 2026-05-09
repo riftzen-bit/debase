@@ -12,28 +12,48 @@ import {
   SparkleIcon,
 } from "./icons";
 import { RunControls } from "./RunControls";
+import {
+  NON_CONFIGURABLE_IDS,
+  SHORTCUTS,
+  formatKeys,
+  type ShortcutScope,
+} from "../lib/shortcuts";
+import { useKeybindings } from "../state/keybindings";
 import type { EnvironmentInfo } from "@shared/chat";
+
+export type SettingsCategory =
+  | "general"
+  | "providers"
+  | "shortcuts"
+  | "environment"
+  | "about";
 
 type Props = {
   onClose: () => void;
+  category?: SettingsCategory;
+  onCategoryChange?: (next: SettingsCategory) => void;
 };
 
-type Category = "general" | "providers" | "environment" | "about";
-
 const CATEGORIES: {
-  id: Category;
+  id: SettingsCategory;
   label: string;
   hint: string;
   icon: ReactNode;
 }[] = [
   { id: "general", label: "General", hint: "Defaults for new threads", icon: <SparkleIcon size={13} /> },
   { id: "providers", label: "Providers", hint: "Claude · Codex · OpenCode", icon: <AgentIcon size={13} /> },
+  { id: "shortcuts", label: "Shortcuts", hint: "Keyboard reference", icon: <GearIcon size={13} /> },
   { id: "environment", label: "Environment", hint: "App + system info", icon: <GearIcon size={13} /> },
   { id: "about", label: "About", hint: "What this is", icon: <BrandMark size={13} /> },
 ];
 
-export function Settings({ onClose }: Props) {
-  const [active, setActive] = useState<Category>("general");
+export function Settings({ onClose, category, onCategoryChange }: Props) {
+  const [internalActive, setInternalActive] = useState<SettingsCategory>("general");
+  const active = category ?? internalActive;
+  const setActive = (next: SettingsCategory) => {
+    if (onCategoryChange) onCategoryChange(next);
+    else setInternalActive(next);
+  };
   const [env, setEnv] = useState<EnvironmentInfo | null>(null);
 
   useEffect(() => {
@@ -100,6 +120,7 @@ export function Settings({ onClose }: Props) {
           <div className="mx-auto max-w-2xl px-8 py-10">
             {active === "general" && <GeneralPane />}
             {active === "providers" && <ProvidersPane />}
+            {active === "shortcuts" && <ShortcutsPane />}
             {active === "environment" && <EnvironmentPane env={env} />}
             {active === "about" && <AboutPane />}
           </div>
@@ -135,7 +156,7 @@ function Header({ onClose }: { onClose: () => void }) {
 }
 
 function GeneralPane() {
-  const { state, updateDefaultRunConfig } = useStore();
+  const { state, updateDefaultRunConfig, setEditorCommand, setAskBeforeTools } = useStore();
   return (
     <Pane
       eyebrow="Run defaults"
@@ -153,7 +174,277 @@ function GeneralPane() {
           unless you actually want the agent acting unsupervised.
         </FieldHint>
       </Card>
+      <ApprovalToggle
+        enabled={state.settings.askBeforeTools === true}
+        onChange={setAskBeforeTools}
+      />
+      <EditorCommandField
+        value={state.settings.editorCommand ?? ""}
+        onChange={setEditorCommand}
+      />
     </Pane>
+  );
+}
+
+function ApprovalToggle({
+  enabled,
+  onChange,
+}: {
+  enabled: boolean;
+  onChange: (next: boolean) => void;
+}) {
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-[11px] italic text-ink-3">approvals</div>
+          <h3 className="mt-1 text-[14.5px] text-ink">Ask before each tool call</h3>
+          <p className="mt-1 text-[12px] leading-relaxed text-ink-3">
+            When on, every Bash / Edit / Write / etc. pauses for an inline allow-or-deny click.
+            Useful for read-through review or untrusted prompts. Full-access mode bypasses this
+            regardless. Adds latency on every tool — leave off for unattended runs.
+          </p>
+        </div>
+        <Toggle checked={enabled} onChange={onChange} />
+      </div>
+    </Card>
+  );
+}
+
+function EditorCommandField({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  return (
+    <Card>
+      <div className="space-y-2">
+        <label className="block">
+          <span className="block font-mono text-[11px] italic text-ink-3">editor command</span>
+          <span className="mt-1 block text-[13.5px] text-ink">Open in editor</span>
+        </label>
+        <input
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder='e.g. code, subl, "C:\\Program Files\\Microsoft VS Code\\Code.exe" --new-window'
+          spellCheck={false}
+          className="w-full rounded-md border border-rule bg-canvas px-3 py-1.5 font-mono text-[12.5px] text-ink placeholder:text-ink-3 focus:border-rule-strong focus:outline-none"
+        />
+        <p className="text-[12px] leading-relaxed text-ink-3">
+          Argv-style command. The project path is appended as the final argument. Quote tokens
+          that contain spaces. Leave empty to disable the action — debase falls back to the OS
+          file handler.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
+function ShortcutsPane() {
+  const { overrides, configPath, loadError, setOverride, revealFile } = useKeybindings();
+  const groups: { scope: ShortcutScope; title: string; description: string }[] = [
+    { scope: "global", title: "Global", description: "Work anywhere in the app." },
+    { scope: "chat", title: "Chat", description: "Active when a thread is selected." },
+    {
+      scope: "composer",
+      title: "Composer",
+      description: "Available while typing a prompt — these stay fixed.",
+    },
+  ];
+  return (
+    <Pane
+      eyebrow="Shortcuts"
+      title="Keyboard reference"
+      description="Click a binding to remap it. Overrides live in keybindings.json so you can also edit the file directly. Composer keys (Enter, ↑) are fixed because they're textarea-specific."
+    >
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0 flex-1">
+            <div className="font-mono text-[11px] italic text-ink-3">config file</div>
+            <p className="mt-1 truncate font-mono text-[12px] text-ink">
+              {configPath || "—"}
+            </p>
+            {loadError && (
+              <p className="mt-1 text-[12px] text-error">{loadError}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => void revealFile()}
+            className="inline-flex h-7 items-center gap-1.5 rounded-md border border-rule bg-canvas px-3 text-[12px] text-ink-2 transition-colors hover:border-rule-strong hover:bg-surface hover:text-ink"
+          >
+            Open in OS
+          </button>
+        </div>
+      </Card>
+      {groups.map((g) => (
+        <Card key={g.scope} padded={false}>
+          <div className="border-b border-rule px-5 py-3">
+            <div className="font-mono text-[11px] italic text-ink-3">{g.title.toLowerCase()}</div>
+            <h3 className="mt-1 text-[14.5px] text-ink">{g.title}</h3>
+            <p className="mt-0.5 text-[12px] text-ink-3">{g.description}</p>
+          </div>
+          <ul className="divide-y divide-rule/60">
+            {SHORTCUTS.filter((s) => s.scope === g.scope).map((s) => (
+              <ShortcutRow
+                key={s.id}
+                id={s.id}
+                description={s.description}
+                defaultKeys={s.keys}
+                overrideKeys={overrides[s.id]}
+                editable={!NON_CONFIGURABLE_IDS.has(s.id)}
+                onSave={(spec) => void setOverride(s.id, spec)}
+              />
+            ))}
+          </ul>
+        </Card>
+      ))}
+    </Pane>
+  );
+}
+
+function ShortcutRow({
+  id,
+  description,
+  defaultKeys,
+  overrideKeys,
+  editable,
+  onSave,
+}: {
+  id: string;
+  description: string;
+  defaultKeys: string;
+  overrideKeys: string | undefined;
+  editable: boolean;
+  onSave: (spec: string | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [pending, setPending] = useState<string>(overrideKeys ?? defaultKeys);
+
+  useEffect(() => {
+    setPending(overrideKeys ?? defaultKeys);
+  }, [overrideKeys, defaultKeys, editing]);
+
+  const effective = overrideKeys ?? defaultKeys;
+  const customised = typeof overrideKeys === "string" && overrideKeys !== defaultKeys;
+
+  const onCapture = (e: React.KeyboardEvent<HTMLLIElement>) => {
+    if (!recording) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      setRecording(false);
+      return;
+    }
+    const parts: string[] = [];
+    if (e.ctrlKey && e.metaKey) parts.push("mod");
+    else {
+      if (e.metaKey) parts.push("mod");
+      else if (e.ctrlKey) parts.push("mod");
+    }
+    if (e.altKey) parts.push("alt");
+    if (e.shiftKey) parts.push("shift");
+    const k = e.key;
+    if (k.length === 1) {
+      parts.push(k.toLowerCase());
+    } else {
+      const lower = k.toLowerCase();
+      if (lower.startsWith("arrow")) parts.push(lower);
+      else if (lower === "escape" || lower === "enter" || lower === "tab") parts.push(lower);
+      else if (lower === " ") parts.push("space");
+      else if (k === "Control" || k === "Shift" || k === "Alt" || k === "Meta") {
+        // Ignore lone modifiers — wait for the user to press a non-mod key.
+        return;
+      } else {
+        parts.push(lower);
+      }
+    }
+    setPending(parts.join("+"));
+    setRecording(false);
+  };
+
+  return (
+    <li
+      className="flex items-center justify-between gap-4 px-5 py-2.5"
+      tabIndex={editing ? 0 : -1}
+      onKeyDown={onCapture}
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block text-[13px] text-ink-2">{description}</span>
+        {customised && (
+          <span className="block font-mono text-[10.5px] italic text-ink-3">
+            default: {formatKeys(defaultKeys)}
+          </span>
+        )}
+      </span>
+      {!editable ? (
+        <kbd className="shrink-0 rounded-sm border border-rule bg-surface/50 px-2 py-0.5 font-mono text-[11px] text-ink">
+          {formatKeys(effective)}
+        </kbd>
+      ) : editing ? (
+        <span className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setRecording((v) => !v)}
+            className={`rounded-sm border px-2 py-0.5 font-mono text-[11px] transition-colors ${
+              recording
+                ? "border-accent bg-accent-soft/70 text-accent-deep"
+                : "border-rule-strong bg-canvas text-ink hover:bg-surface"
+            }`}
+          >
+            {recording ? "press keys…" : pending ? formatKeys(pending) : "(empty)"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onSave(pending);
+              setEditing(false);
+              setRecording(false);
+            }}
+            className="rounded-md border border-accent/50 bg-accent-soft/60 px-2 py-0.5 text-[11px] text-accent-deep hover:bg-accent-soft"
+          >
+            save
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setEditing(false);
+              setRecording(false);
+            }}
+            className="rounded-md border border-rule bg-canvas px-2 py-0.5 text-[11px] text-ink-2 hover:bg-surface"
+          >
+            cancel
+          </button>
+          {customised && (
+            <button
+              type="button"
+              onClick={() => {
+                onSave(null);
+                setEditing(false);
+                setRecording(false);
+              }}
+              title="Reset to default"
+              className="rounded-md border border-rule bg-canvas px-2 py-0.5 text-[11px] text-ink-3 hover:bg-surface hover:text-ink-2"
+            >
+              reset
+            </button>
+          )}
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setEditing(true)}
+          aria-label={`Remap ${id}`}
+          className="shrink-0 rounded-sm border border-rule bg-surface/50 px-2 py-0.5 font-mono text-[11px] text-ink transition-colors hover:border-rule-strong hover:bg-surface"
+        >
+          {formatKeys(effective)}
+        </button>
+      )}
+    </li>
   );
 }
 

@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import type { Project, Thread } from "../state/types";
 import { useStore } from "../state/store";
 import { findModel } from "@shared/providers";
-import { relativeTime, truncate } from "../lib/format";
+import { formatCost, formatDuration, relativeTime, truncate } from "../lib/format";
 import { AgentIcon, ClaudeMark, PinIcon, TrashIcon } from "./icons";
+import { ProjectScripts } from "./ProjectScripts";
 
 type Props = {
   thread: Thread;
@@ -50,6 +51,7 @@ export function ChatHeader({ thread, project }: Props) {
   };
 
   const model = findModel(thread.runConfig.model);
+  const usage = useMemo(() => summarizeUsage(thread), [thread.messages]);
 
   return (
     <header className="border-b border-rule bg-canvas">
@@ -124,6 +126,8 @@ export function ChatHeader({ thread, project }: Props) {
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
+          <ProjectScripts project={project} thread={thread} />
+          <span className="mx-1 h-4 w-px bg-rule" />
           <button
             type="button"
             onClick={() => setThreadPinned(thread.id, !thread.pinned)}
@@ -154,6 +158,17 @@ export function ChatHeader({ thread, project }: Props) {
             </span>
             <span>·</span>
             <span>{thread.messages.length} msg</span>
+            {usage.turns > 0 && (
+              <>
+                <span>·</span>
+                <span
+                  className="font-mono"
+                  title={`${usage.turns} agent turn${usage.turns === 1 ? "" : "s"} · ${formatDuration(usage.durationMs)} cumulative`}
+                >
+                  {usage.turns}t · {formatCost(usage.costUsd)}
+                </span>
+              </>
+            )}
             <span>·</span>
             <span>{relativeTime(thread.updatedAt)}</span>
             <span>·</span>
@@ -165,4 +180,21 @@ export function ChatHeader({ thread, project }: Props) {
       </div>
     </header>
   );
+}
+
+function summarizeUsage(thread: Thread): {
+  costUsd: number;
+  turns: number;
+  durationMs: number;
+} {
+  let costUsd = 0;
+  let turns = 0;
+  let durationMs = 0;
+  for (const m of thread.messages) {
+    if (m.role !== "assistant") continue;
+    if (typeof m.costUsd === "number") costUsd += m.costUsd;
+    if (typeof m.turns === "number") turns += m.turns;
+    if (typeof m.durationMs === "number") durationMs += m.durationMs;
+  }
+  return { costUsd, turns, durationMs };
 }

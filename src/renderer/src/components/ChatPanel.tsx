@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 import { useActiveThread, useActiveProject, useStore } from "../state/store";
+import { useShortcutOverrides } from "../state/keybindings";
+import { effectiveKey, matchesKey } from "../lib/shortcuts";
+import { ChangedFiles } from "./ChangedFiles";
 import { ChatHeader } from "./ChatHeader";
 import { Composer } from "./Composer";
 import { EmptyState } from "./EmptyState";
 import { MessageList } from "./MessageList";
+import { PlanFollowUp } from "./PlanFollowUp";
 import { TasksPanel } from "./TasksPanel";
 import { Welcome } from "./Welcome";
 
@@ -54,6 +58,25 @@ export function ChatPanel({ onOpenSettings }: Props) {
   }, [tasksOpen]);
   const toggleTasks = () => setTasksOpen((v) => !v);
 
+  const overrides = useShortcutOverrides();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (matchesKey(e, effectiveKey("lock", "mod+l", overrides))) {
+        e.preventDefault();
+        e.stopPropagation();
+        setLocked((v) => !v);
+        return;
+      }
+      if (matchesKey(e, effectiveKey("tasks", "mod+j", overrides))) {
+        e.preventDefault();
+        e.stopPropagation();
+        setTasksOpen((v) => !v);
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [overrides]);
+
   const hasProjects = state.projects.length > 0;
 
   if (!hasProjects) {
@@ -73,11 +96,13 @@ export function ChatPanel({ onOpenSettings }: Props) {
         {active ? (
           <>
             <ChatHeader thread={active.thread} project={active.project} />
+            <ChangedFiles thread={active.thread} cwd={active.project.path} />
             {active.thread.messages.length === 0 ? (
               <FreshThreadHint />
             ) : (
-              <MessageList thread={active.thread} locked={locked} />
+              <MessageList thread={active.thread} locked={locked} cwd={active.project.path} />
             )}
+            <PlanFollowUp thread={active.thread} />
             <Composer {...composerProps} />
           </>
         ) : activeProject ? (

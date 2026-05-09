@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  debase app icon. The mark is the BrandMark (`src/renderer/src/components/icons.tsx`)
+  flipped to a positive (ochre fill, cream slabs) so it reads against both light and
+  dark taskbars / docks. Padding follows the iOS/Windows safe area convention so the
+  rounded-square chrome doesn't get clipped by OS masks.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="#a3621c"/>
+  <rect x="64" y="64" width="896" height="896" rx="200" fill="none" stroke="#7a4716" stroke-width="6"/>
+
+  <!-- Three slabs reading as decomposed page-lines, mirroring the BrandMark glyph. -->
+  <rect x="240" y="364" width="320" height="80" rx="22" fill="#faf7ef"/>
+  <rect x="320" y="488" width="416" height="80" rx="22" fill="#faf7ef"/>
+  <rect x="240" y="612" width="368" height="80" rx="22" fill="#faf7ef"/>
+
+  <!-- Punctuation dot — sits at the corner like a paragraph terminator. -->
+  <circle cx="752" cy="744" r="48" fill="#faf7ef"/>
+</svg>

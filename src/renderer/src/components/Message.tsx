@@ -2,14 +2,17 @@ import { useEffect, useState } from "react";
 import type { AssistantBlock, AssistantMessage, ChatMessage } from "../state/types";
 import { Markdown } from "./Markdown";
 import { Trace } from "./Trace";
+import { AskUserCard, isAskUserBlock } from "./AskUserCard";
 import { formatCost, formatDuration } from "../lib/format";
 import { CheckIcon, CopyIcon } from "./icons";
 
 type Props = {
   message: ChatMessage;
+  threadId: string;
+  cwd?: string;
 };
 
-export function Message({ message }: Props) {
+export function Message({ message, threadId, cwd }: Props) {
   if (message.role === "user") {
     return (
       <article className="grid grid-cols-[72px_1fr] gap-4 border-b border-rule/60 px-6 py-5">
@@ -31,26 +34,35 @@ export function Message({ message }: Props) {
       message.status === "done" ||
       message.status === "error");
 
+  const isPlan = message.mode === "plan";
+
   return (
     <article className="grid grid-cols-[72px_1fr] gap-4 border-b border-rule/60 px-6 py-5">
       <RoleLabel role="Claude" tone="accent" />
       <div className="min-w-0 space-y-2">
+        {isPlan && <PlanBadge />}
         {grouped.length === 0 && isStreaming && <WorkingIndicator startedAt={message.createdAt} />}
 
-        {grouped.map((seg, i) =>
-          seg.kind === "text" ? (
-            <div key={`t-${i}`}>
-              <Markdown>{seg.text}</Markdown>
-            </div>
-          ) : (
+        {grouped.map((seg, i) => {
+          if (seg.kind === "text") {
+            return (
+              <div key={`t-${i}`}>
+                <Markdown cwd={cwd}>{seg.text}</Markdown>
+              </div>
+            );
+          }
+          if (seg.kind === "ask") {
+            return <AskUserCard key={`a-${i}`} block={seg.block} threadId={threadId} />;
+          }
+          return (
             <Trace
               key={`g-${i}`}
               ops={seg.ops}
               streaming={isStreaming && i === grouped.length - 1}
               parentDone={!isStreaming}
             />
-          ),
-        )}
+          );
+        })}
 
         {isStreaming && grouped.length > 0 && (
           <WorkingIndicator startedAt={message.createdAt} />
@@ -87,8 +99,10 @@ export function Message({ message }: Props) {
   );
 }
 
+type ToolUseBlock = Extract<AssistantBlock, { kind: "tool_use" }>;
 type Segment =
   | { kind: "text"; text: string }
+  | { kind: "ask"; block: ToolUseBlock }
   | { kind: "ops"; ops: Exclude<AssistantBlock, { kind: "text" }>[] };
 
 function groupBlocks(blocks: AssistantBlock[]): Segment[] {
@@ -96,6 +110,10 @@ function groupBlocks(blocks: AssistantBlock[]): Segment[] {
   for (const b of blocks) {
     if (b.kind === "text") {
       out.push({ kind: "text", text: b.text });
+      continue;
+    }
+    if (isAskUserBlock(b)) {
+      out.push({ kind: "ask", block: b });
       continue;
     }
     const tail = out[out.length - 1];
@@ -179,6 +197,15 @@ function fmtElapsed(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+function PlanBadge() {
+  return (
+    <div className="inline-flex items-center gap-1.5 rounded-md border border-accent/40 bg-accent-soft/40 px-2 py-0.5 text-[11px] text-accent-deep">
+      <span className="font-mono italic">plan</span>
+      <span className="text-ink-3">— proposing, not executing</span>
+    </div>
+  );
 }
 
 function RoleLabel({ role, tone }: { role: string; tone?: "accent" }) {

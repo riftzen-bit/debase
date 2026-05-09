@@ -1,7 +1,9 @@
 import type {
+  CanUseTool,
   EffortLevel as SdkEffortLevel,
   Options,
   PermissionMode,
+  PermissionResult,
   Query,
   SDKMessage,
   ThinkingConfig,
@@ -16,6 +18,16 @@ export type ClaudeRunOptions = {
   runConfig: RunConfig;
   signal: AbortSignal;
   onEvent: (event: ChatEvent) => void;
+  /**
+   * When provided, every tool call is gated through this hook. Resolves to
+   * "allow" or "deny" — typically wired by the IPC layer to a renderer
+   * approval card. Omit to keep the SDK's default auto-allow behaviour.
+   */
+  requestPermission?: (
+    toolName: string,
+    input: Record<string, unknown>,
+    toolUseId: string,
+  ) => Promise<"allow" | "deny">;
 };
 
 type SdkModule = typeof import("@anthropic-ai/claude-agent-sdk");
@@ -36,6 +48,7 @@ export async function runClaude({
   runConfig,
   signal,
   onEvent,
+  requestPermission,
 }: ClaudeRunOptions): Promise<void> {
   const options: Options = {
     model: runConfig.model,
@@ -44,6 +57,13 @@ export async function runClaude({
     abortController: toAbortController(signal),
     thinking: mapThinking(runConfig),
     effort: runConfig.effort as SdkEffortLevel,
+    // The SDK's built-in AskUserQuestion tool only resolves when there is an
+    // interactive TTY (the Claude Code CLI). Inside an Agent SDK host it
+    // auto-cancels and the agent is forced to ask via plain text afterwards
+    // — which presents to the user as a ghost "answered" card they never
+    // touched. Disabling the tool keeps the conversation clean: Claude just
+    // asks in prose and the user replies in the composer like any turn.
+    disallowedTools: ["AskUserQuestion"],
   };
 
   if (runConfig.fallbackModel) {
@@ -60,6 +80,22 @@ export async function runClaude({
 
   if (resumeSessionId) {
     options.resume = resumeSessionId;
+  }
+
+  // Approval bridge — when the caller provides a requestPermission hook, the
+  // SDK pauses before each tool execution and waits for our async resolution.
+  // bypassPermissions short-circuits this in the SDK, so we don't bother
+  // wiring the hook when fullAccess is on.
+  if (requestPermission && !runConfig.fullAccess) {
+    const canUseTool: CanUseTool = async (toolName, input, ctx) => {
+      const decision = await requestPermission(toolName, input, ctx.toolUseID);
+      const result: PermissionResult =
+        decision === "allow"
+          ? { behavior: "allow", updatedInput: input }
+          : { behavior: "deny", message: "User denied this tool call.", interrupt: false };
+      return result;
+    };
+    options.canUseTool = canUseTool;
   }
 
   let q: Query | null = null;

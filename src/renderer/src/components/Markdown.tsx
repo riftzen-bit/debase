@@ -5,9 +5,10 @@ import rehypeHighlight from "rehype-highlight";
 
 type Props = {
   children: string;
+  cwd?: string;
 };
 
-function MarkdownImpl({ children }: Props) {
+function MarkdownImpl({ children, cwd }: Props) {
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -32,16 +33,45 @@ function MarkdownImpl({ children }: Props) {
           <ol className="my-2 ml-5 list-decimal space-y-1 text-[14.5px] text-ink">{children}</ol>
         ),
         li: ({ children }) => <li className="leading-relaxed">{children}</li>,
-        a: ({ href, children }) => (
-          <a
-            href={href}
-            target="_blank"
-            rel="noreferrer"
-            className="text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
-          >
-            {children}
-          </a>
-        ),
+        a: ({ href, children }) => {
+          const isFile = href != null && isFilePath(href);
+          if (isFile) {
+            const resolved = resolveFilePath(href, cwd);
+            if (resolved == null) {
+              return (
+                <span
+                  className="text-ink-3"
+                  title="Link rejected: relative paths with `..` are not allowed"
+                >
+                  {children}
+                </span>
+              );
+            }
+            return (
+              <a
+                href={href}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void window.api.shell.openPath(resolved);
+                }}
+                title={`Open ${resolved}`}
+                className="text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent cursor-pointer"
+              >
+                {children}
+              </a>
+            );
+          }
+          return (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent underline decoration-accent/40 underline-offset-2 hover:decoration-accent"
+            >
+              {children}
+            </a>
+          );
+        },
         blockquote: ({ children }) => (
           <blockquote className="my-3 border-l-2 border-accent/50 pl-3 italic text-ink-2">
             {children}
@@ -88,3 +118,30 @@ function MarkdownImpl({ children }: Props) {
 }
 
 export const Markdown = memo(MarkdownImpl);
+
+function isFilePath(href: string): boolean {
+  if (!href) return false;
+  if (/^(https?|mailto|ftp|file|tel|data|javascript):/i.test(href)) return false;
+  if (href.startsWith("#")) return false;
+  // A bare `anthropic.com` has no slash and is a domain, not a file. Only
+  // treat as a file when there's an unambiguous path signal: drive letter,
+  // POSIX absolute, explicit `./` or `../`, or an embedded slash/backslash.
+  if (/^[a-zA-Z]:[\\/]/.test(href)) return true;
+  if (href.startsWith("/")) return true;
+  if (/^\.\.?[\\/]/.test(href)) return true;
+  if (/[\\/]/.test(href)) return true;
+  return false;
+}
+
+function resolveFilePath(href: string, cwd?: string): string | null {
+  if (/^[a-zA-Z]:[\\/]/.test(href)) return href;
+  if (href.startsWith("/")) return href;
+  if (!cwd) return href;
+  // Main process re-resolves and re-checks the allowlist, but failing closed
+  // here means the link renders as visibly inert rather than silently no-op'ing.
+  if (/(^|[\\/])\.\.([\\/]|$)/.test(href)) return null;
+  const trimmed = href.replace(/^\.\//, "");
+  const root = cwd.replace(/[\\/]+$/, "");
+  const sep = /^[a-zA-Z]:/.test(root) ? "\\" : "/";
+  return root + sep + trimmed.replace(/\//g, sep);
+}

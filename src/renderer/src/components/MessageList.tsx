@@ -12,11 +12,12 @@ type Props = {
    * if you were already there" rule applies.
    */
   locked: boolean;
+  cwd?: string;
 };
 
 const NEAR_BOTTOM_PX = 240;
 
-export function MessageList({ thread, locked }: Props) {
+export function MessageList({ thread, locked, cwd }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const lastCountRef = useRef(thread.messages.length);
   const [atBottom, setAtBottom] = useState(true);
@@ -84,7 +85,7 @@ export function MessageList({ thread, locked }: Props) {
       >
         <div className="mx-auto max-w-3xl">
           {thread.messages.map((msg) => (
-            <Message key={msg.id} message={msg} />
+            <Message key={msg.id} message={msg} threadId={thread.id} cwd={cwd} />
           ))}
         </div>
       </div>
