@@ -31,7 +31,7 @@ export function Welcome({ onOpenSettings }: Props) {
           <div className="inline-flex items-center gap-2 text-ink-2">
             <ClaudeMark size={20} />
             <span className="font-mono text-[12.5px] italic text-ink-3">
-              debase · claude code shell
+              debase · code agent shell
             </span>
           </div>
           <h1 className="text-[34px] font-light leading-[1.05] tracking-tight text-ink">
@@ -78,7 +78,7 @@ export function Welcome({ onOpenSettings }: Props) {
           <Bullet
             icon={<ClaudeMark size={13} />}
             heading="Original Claude Code"
-            body="No custom system prompt. The agent runs through @anthropic-ai/claude-agent-sdk against your CLI login."
+            body="No custom system prompt. Claude and Codex run through their own CLI logins."
           />
         </ul>
       </div>

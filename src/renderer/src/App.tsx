@@ -83,6 +83,7 @@ function Shell() {
       return false;
     }
   });
+  const [narrowViewport, setNarrowViewport] = useState(() => window.innerWidth < 720);
   useEffect(() => {
     try {
       localStorage.setItem(SIDEBAR_WIDTH_KEY, String(sidebarWidth));
@@ -97,6 +98,12 @@ function Shell() {
       /* ignore */
     }
   }, [sidebarHidden]);
+  useEffect(() => {
+    const sync = () => setNarrowViewport(window.innerWidth < 720);
+    sync();
+    window.addEventListener("resize", sync);
+    return () => window.removeEventListener("resize", sync);
+  }, []);
 
   const selectedThreadId = state.selectedThreadId;
   const selectedProjectId = state.selectedProjectId;
@@ -303,7 +310,8 @@ function Shell() {
     openSettings,
   ]);
 
-  const gridStyle = sidebarHidden
+  const effectiveSidebarHidden = sidebarHidden || narrowViewport;
+  const gridStyle = effectiveSidebarHidden
     ? { gridTemplateColumns: "0px 1fr" }
     : { gridTemplateColumns: `${sidebarWidth}px 1fr` };
 
@@ -313,16 +321,16 @@ function Shell() {
         onOpenSettings={() => openSettings()}
         settingsActive={view === "settings"}
         onToggleSidebar={() => setSidebarHidden((v) => !v)}
-        sidebarHidden={sidebarHidden}
+        sidebarHidden={effectiveSidebarHidden}
       />
       <div className="grid min-h-0 overflow-hidden" style={gridStyle}>
         <div
           className={`relative border-r border-rule overflow-hidden ${
-            sidebarHidden ? "pointer-events-none invisible" : ""
+            effectiveSidebarHidden ? "pointer-events-none invisible" : ""
           }`}
         >
           <Sidebar onOpenSettings={() => openSettings()} settingsActive={view === "settings"} />
-          {!sidebarHidden && (
+          {!effectiveSidebarHidden && (
             <SidebarResizeHandle
               width={sidebarWidth}
               onChange={(w) => setSidebarWidth(clampSidebar(w))}
@@ -330,7 +338,7 @@ function Shell() {
           )}
         </div>
         <div className="relative overflow-hidden">
-          {sidebarHidden && (
+          {effectiveSidebarHidden && (
             <button
               type="button"
               onClick={() => setSidebarHidden(false)}

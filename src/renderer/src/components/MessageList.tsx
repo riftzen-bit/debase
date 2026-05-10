@@ -85,7 +85,13 @@ export function MessageList({ thread, locked, cwd }: Props) {
       >
         <div className="mx-auto max-w-3xl">
           {thread.messages.map((msg) => (
-            <Message key={msg.id} message={msg} threadId={thread.id} cwd={cwd} />
+            <Message
+              key={msg.id}
+              message={msg}
+              threadId={thread.id}
+              cwd={cwd}
+              providerFallback={thread.runConfig.provider}
+            />
           ))}
         </div>
       </div>

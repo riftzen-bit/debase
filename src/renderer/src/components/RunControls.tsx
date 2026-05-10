@@ -4,13 +4,24 @@ import {
   THINKING_BUDGET_MAX,
   THINKING_BUDGET_MIN,
 } from "@shared/chat";
-import { findModel, MODELS, modelSupports1MBeta } from "@shared/providers";
+import {
+  defaultModelForProvider,
+  findModel,
+  isReadyProvider,
+  modelsForProvider,
+  modelSupports1MBeta,
+  PROVIDER_META,
+  PROVIDERS,
+  type ProviderId,
+} from "@shared/providers";
 import { Popover, MenuItem, MenuLabel, MenuDivider } from "./Popover";
 import {
   BarsIcon,
+  BoltIcon,
   CheckIcon,
   ChevronDownIcon,
   ClaudeMark,
+  CodexMark,
   EyeIcon,
   LockIcon,
   LockOpenIcon,
@@ -22,6 +33,7 @@ type Props = {
   runConfig: RunConfig;
   disabled?: boolean;
   onChange: (next: Partial<RunConfig>) => void;
+  enabledProviders?: Record<ProviderId, boolean>;
   /** When true, the Composer's ultrathink hue effect is forwarded to the model pill. */
   ultrathink?: boolean;
 };
@@ -37,19 +49,19 @@ const ACCESS_LEVELS: {
   {
     id: "plan",
     label: "Plan",
-    sub: "Draft a plan only — no commands or file changes.",
+    sub: "Read-only work; no file changes.",
     icon: <EyeIcon size={13} />,
   },
   {
     id: "supervised",
-    label: "Supervised",
-    sub: "Ask before commands and file changes.",
+    label: "Sandboxed",
+    sub: "Use normal project-scoped permissions.",
     icon: <LockIcon size={13} />,
   },
   {
     id: "auto-edit",
     label: "Auto-accept edits",
-    sub: "Auto-approve edits, ask before other actions.",
+    sub: "Prefer edits while staying inside the project sandbox.",
     icon: <PencilIcon size={13} />,
   },
   {
@@ -74,8 +86,19 @@ const THINKING_MODES: { id: ThinkingMode; label: string; sub: string }[] = [
   { id: "disabled", label: "Off", sub: "No extended thinking." },
 ];
 
-export function RunControls({ runConfig, disabled, onChange, ultrathink }: Props) {
+export function RunControls({
+  runConfig,
+  disabled,
+  onChange,
+  enabledProviders,
+  ultrathink,
+}: Props) {
   const model = findModel(runConfig.model);
+  const provider = model?.provider ?? runConfig.provider;
+  const providerModels = modelsForProvider(provider);
+  const availableProviders = PROVIDERS.filter(
+    (p) => isReadyProvider(p) && (enabledProviders?.[p] ?? true),
+  );
   // Always include the persisted value in the picker — even if the model
   // registry doesn't list it for the active model. Otherwise a thread saved
   // with `effort: "max"` on a model where the registry omits it would silently
@@ -91,6 +114,59 @@ export function RunControls({ runConfig, disabled, onChange, ultrathink }: Props
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
+      <Popover
+        align="start"
+        width={240}
+        trigger={({ toggle, open }) => (
+          <PillButton
+            onClick={toggle}
+            active={open}
+            disabled={disabled}
+            ariaLabel={`Choose provider (${PROVIDER_META[provider].label})`}
+            title={PROVIDER_META[provider].label}
+            compact
+          >
+            <span className={provider === "claude" && ultrathink ? "ultrathink-hue" : ""}>
+              <ProviderGlyph provider={provider} size={12} />
+            </span>
+            <Chevron />
+          </PillButton>
+        )}
+      >
+        {({ close }) => (
+          <>
+            <MenuLabel>Provider</MenuLabel>
+            {availableProviders.map((p) => {
+              const nextModel = defaultModelForProvider(p);
+              return (
+                <MenuItem
+                  key={p}
+                  active={p === provider}
+                  icon={<ProviderGlyph provider={p} size={13} />}
+                  hint={PROVIDER_META[p].description}
+                  onClick={() => {
+                    const nextEffort = adjustEffortForModel(runConfig.effort, nextModel.value);
+                    const nextThinking =
+                      runConfig.thinking === "adaptive" && !nextModel.supportsAdaptiveThinking
+                        ? ("enabled" as ThinkingMode)
+                        : runConfig.thinking;
+                    onChange({
+                      provider: p,
+                      model: nextModel.value,
+                      effort: nextEffort,
+                      thinking: nextThinking,
+                      context1M: false,
+                    });
+                    close();
+                  }}
+                >
+                  {PROVIDER_META[p].label}
+                </MenuItem>
+              );
+            })}
+          </>
+        )}
+      </Popover>
       {/* Model picker — branded with the Claude mark; hue-rotates while ultrathink is active. */}
       <Popover
         align="start"
@@ -98,7 +174,7 @@ export function RunControls({ runConfig, disabled, onChange, ultrathink }: Props
         trigger={({ toggle, open }) => (
           <PillButton onClick={toggle} active={open} disabled={disabled} ariaLabel="Choose model">
             <span className={ultrathink ? "ultrathink-hue" : ""}>
-              <ClaudeMark size={12} />
+              <ProviderGlyph provider={provider} size={12} />
             </span>
             <span className="text-ink">{model?.displayName ?? runConfig.model}</span>
             <Chevron />
@@ -108,11 +184,11 @@ export function RunControls({ runConfig, disabled, onChange, ultrathink }: Props
         {({ close }) => (
           <>
             <MenuLabel>Models</MenuLabel>
-            {MODELS.map((m) => (
+            {providerModels.map((m) => (
               <MenuItem
                 key={m.value}
                 active={m.value === runConfig.model}
-                icon={<ClaudeMark size={13} />}
+                icon={<ProviderGlyph provider={m.provider} size={13} />}
                 hint={
                   <span>
                     {fmtContext(m.context)} · {m.description}
@@ -125,6 +201,7 @@ export function RunControls({ runConfig, disabled, onChange, ultrathink }: Props
                       ? ("enabled" as ThinkingMode)
                       : runConfig.thinking;
                   const next: Partial<RunConfig> = {
+                    provider: m.provider,
                     model: m.value,
                     effort: nextEffort,
                     thinking: nextThinking,
@@ -147,7 +224,7 @@ export function RunControls({ runConfig, disabled, onChange, ultrathink }: Props
         )}
       </Popover>
 
-      {/* Access picker — Supervised / Auto-accept edits / Full access. */}
+      {/* Access picker — sandboxed / auto-edit / full access. */}
       <Popover
         align="start"
         width={300}
@@ -228,7 +305,69 @@ export function RunControls({ runConfig, disabled, onChange, ultrathink }: Props
         )}
       </Popover>
 
+      {/* Codex speed tier. Mirrors Codex CLI fast mode without changing reasoning effort. */}
+      {provider === "codex" && (
+        <Popover
+          align="start"
+          width={220}
+          trigger={({ toggle, open }) => (
+            <PillButton
+              onClick={toggle}
+              active={open}
+              disabled={disabled}
+              ariaLabel="Choose Codex speed"
+              tone={runConfig.serviceTier === "fast" ? "accent" : undefined}
+            >
+              <span
+                className={
+                  runConfig.serviceTier === "fast" ? "text-accent-deep" : "text-ink-3"
+                }
+              >
+                <BoltIcon size={11} />
+              </span>
+              <span
+                className={
+                  runConfig.serviceTier === "fast" ? "text-accent-deep" : "text-ink"
+                }
+              >
+                {runConfig.serviceTier === "fast" ? "fast" : "normal"}
+              </span>
+              <Chevron />
+            </PillButton>
+          )}
+        >
+          {({ close }) => (
+            <>
+              <MenuLabel>Codex speed</MenuLabel>
+              <MenuItem
+                active={runConfig.serviceTier !== "fast"}
+                icon={<BoltIcon size={13} />}
+                hint="Use the standard service tier."
+                onClick={() => {
+                  onChange({ serviceTier: "standard" });
+                  close();
+                }}
+              >
+                Normal
+              </MenuItem>
+              <MenuItem
+                active={runConfig.serviceTier === "fast"}
+                icon={<BoltIcon size={13} />}
+                hint="Use Codex fast mode for lower latency."
+                onClick={() => {
+                  onChange({ serviceTier: "fast" });
+                  close();
+                }}
+              >
+                Fast
+              </MenuItem>
+            </>
+          )}
+        </Popover>
+      )}
+
       {/* Thinking mode picker. */}
+      {provider === "claude" && (
       <Popover
         align="start"
         width={260}
@@ -299,6 +438,7 @@ export function RunControls({ runConfig, disabled, onChange, ultrathink }: Props
           </>
         )}
       </Popover>
+      )}
 
       {/* 1M context toggle (Sonnet 4.x only). */}
       {supports1M && (
@@ -327,14 +467,18 @@ function PillButton({
   active,
   disabled,
   ariaLabel,
+  title,
   tone,
+  compact,
 }: {
   children: React.ReactNode;
   onClick: () => void;
   active?: boolean;
   disabled?: boolean;
   ariaLabel?: string;
+  title?: string;
   tone?: "accent";
+  compact?: boolean;
 }) {
   const accent = tone === "accent";
   return (
@@ -343,7 +487,10 @@ function PillButton({
       onClick={onClick}
       disabled={disabled}
       aria-label={ariaLabel}
-      className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+      title={title}
+      className={`inline-flex h-7 items-center gap-1.5 rounded-md border text-[12px] transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+        compact ? "w-10 justify-center px-0" : "px-2"
+      } ${
         active
           ? accent
             ? "border-accent/60 bg-accent-soft/60"
@@ -364,6 +511,11 @@ function Chevron() {
       <ChevronDownIcon size={11} />
     </span>
   );
+}
+
+function ProviderGlyph({ provider, size }: { provider: ProviderId; size: number }) {
+  if (provider === "codex") return <CodexMark size={size} />;
+  return <ClaudeMark size={size} />;
 }
 
 function deriveAccess(rc: RunConfig): AccessLevel {

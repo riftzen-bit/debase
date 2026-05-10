@@ -166,6 +166,7 @@ function GeneralPane() {
       <Card>
         <RunControls
           runConfig={state.settings.defaults}
+          enabledProviders={state.settings.enabledProviders}
           onChange={(next) => updateDefaultRunConfig(next)}
         />
         <FieldHint>
@@ -454,7 +455,7 @@ function ProvidersPane() {
     <Pane
       eyebrow="Providers"
       title="Which agents are available"
-      description="Claude is the only ready provider. Codex and OpenCode are wired into the UI for when their CLI bridges land — their toggles will unlock here once they ship."
+      description="Claude and Codex are ready. OpenCode stays parked until its CLI bridge is added."
     >
       <ul className="divide-y divide-rule rounded-lg border border-rule bg-canvas">
         {PROVIDERS.map((id) => {
@@ -509,9 +510,9 @@ function EnvironmentPane({ env }: { env: EnvironmentInfo | null }) {
         </dl>
       </Card>
       <Note>
-        The Claude provider authenticates through your{" "}
-        <span className="font-mono text-ink-2">claude</span> CLI login. You don't need to set
-        an API key here — debase reuses whatever the CLI has stored.
+        Claude authenticates through your <span className="font-mono text-ink-2">claude</span>{" "}
+        CLI login. Codex authenticates through your{" "}
+        <span className="font-mono text-ink-2">codex</span> CLI login.
       </Note>
     </Pane>
   );
@@ -522,7 +523,7 @@ function AboutPane() {
     <Pane
       eyebrow="About"
       title="debase"
-      description="A desktop shell that wraps Claude Code (and, eventually, Codex and OpenCode) into one interface. Threads are organised by project, the project's path becomes the agent's working directory, and the underlying CLI behavior is left untouched."
+      description="A desktop shell that wraps Claude Code and OpenAI Codex into one interface. Threads are organised by project, the project's path becomes the agent's working directory, and the underlying CLI behavior is left untouched."
     >
       <Card>
         <div className="space-y-3 text-[13px] leading-relaxed text-ink-2">
@@ -534,7 +535,7 @@ function AboutPane() {
           </p>
           <p>
             <span className="font-medium text-ink">Stack.</span> Electron 33 ·
-            electron-vite · React 19 · Tailwind 4 · @anthropic-ai/claude-agent-sdk.
+            electron-vite · React 19 · Tailwind 4 · Claude Agent SDK · Codex CLI.
           </p>
           <p>
             <span className="font-medium text-ink">Aesthetic.</span> Warm paper, ochre accent,

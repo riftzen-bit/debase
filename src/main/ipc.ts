@@ -12,12 +12,14 @@ import { mkdir, readFile, writeFile, access } from "node:fs/promises";
 import { basename, extname, join, resolve as resolvePath } from "node:path";
 import { homedir, platform } from "node:os";
 import { runClaude } from "./agent/claude";
+import { runCodex } from "./agent/codex";
 import {
   addProjectRoot,
   bootstrapAllowlist,
   isInsideAllowedRoot,
 } from "./security";
 import { IpcChannel } from "@shared/ipc";
+import { findModel } from "@shared/providers";
 import type {
   CancelPromptRequest,
   ChatEvent,
@@ -665,7 +667,7 @@ async function ensureFullAccessConfirmed(
     title: "Allow full access?",
     message: "This thread is set to bypass permission prompts.",
     detail:
-      "Claude will run shell commands, edit files, and use tools without asking. " +
+      "The selected agent will run shell commands, edit files, and use tools without asking. " +
       "Approve only if you trust the prompt and the working directory.\n\n" +
       "debase will ask again after the next app restart.",
     buttons: ["Cancel", "Allow this session"],
@@ -743,6 +745,13 @@ async function validateSendRequest(req: SendPromptRequest): Promise<void> {
   if (typeof req.runConfig.model !== "string" || req.runConfig.model.length === 0) {
     throw new Error("Missing model");
   }
+  if (req.runConfig.provider !== req.provider) {
+    throw new Error("Provider mismatch");
+  }
+  const model = findModel(req.runConfig.model);
+  if (!model || model.provider !== req.provider) {
+    throw new Error("Model is not available for provider");
+  }
   // cwd, when supplied, must be inside a project root the user has authorized
   // through the native chooseDirectory dialog (or via the one-shot bootstrap
   // import). A compromised renderer otherwise gets to point the agent at the
@@ -777,6 +786,17 @@ async function runProvider(
       signal,
       onEvent,
       requestPermission,
+    });
+    return;
+  }
+  if (req.provider === "codex") {
+    await runCodex({
+      prompt: req.prompt,
+      cwd: req.cwd,
+      resumeSessionId: req.resumeSessionId ?? null,
+      runConfig: req.runConfig,
+      signal,
+      onEvent,
     });
     return;
   }

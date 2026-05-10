@@ -217,6 +217,10 @@ function reducer(state: AppState, action: Action): AppState {
         },
         projects: mapThread(state.projects, action.threadId, (t) => ({
           ...t,
+          sessionId:
+            action.runConfig.provider && action.runConfig.provider !== t.runConfig.provider
+              ? null
+              : t.sessionId,
           runConfig: { ...t.runConfig, ...action.runConfig },
           updatedAt: Date.now(),
         })),
@@ -798,6 +802,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       const placeholder: AssistantMessage = {
         id: assistantMsgId,
         role: "assistant",
+        provider: thread.runConfig.provider,
         blocks: [],
         createdAt: Date.now(),
         status: "streaming",
@@ -818,7 +823,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         const resp = await window.api.chat.send({
           requestId,
           threadId,
-          provider: "claude",
+          provider: thread.runConfig.provider,
           prompt: text,
           cwd: project.path || undefined,
           resumeSessionId: thread.sessionId,

@@ -3,7 +3,7 @@ import type { Project, Thread } from "../state/types";
 import { useStore } from "../state/store";
 import { findModel } from "@shared/providers";
 import { formatCost, formatDuration, relativeTime, truncate } from "../lib/format";
-import { AgentIcon, ClaudeMark, PinIcon, TrashIcon } from "./icons";
+import { AgentIcon, ClaudeMark, CodexMark, PinIcon, TrashIcon } from "./icons";
 import { ProjectScripts } from "./ProjectScripts";
 
 type Props = {
@@ -89,7 +89,7 @@ export function ChatHeader({ thread, project }: Props) {
           </div>
         </div>
       )}
-      <div className="mx-auto flex max-w-3xl items-center justify-between gap-4 px-6 py-3">
+      <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 px-10 py-3 sm:px-6">
         <div className="flex min-w-0 items-center gap-3">
           {editing ? (
             <input
@@ -151,9 +151,9 @@ export function ChatHeader({ thread, project }: Props) {
             <TrashIcon size={13} />
           </button>
           <span className="mx-1 h-4 w-px bg-rule" />
-          <div className="flex items-center gap-2 text-[11.5px] text-ink-3">
+          <div className="hidden items-center gap-2 text-[11.5px] text-ink-3 sm:flex">
             <span className="inline-flex items-center gap-1.5">
-              <ClaudeMark size={11} />
+              <ProviderGlyph provider={model?.provider ?? thread.runConfig.provider} />
               <span className="font-mono">{model?.displayName ?? thread.runConfig.model}</span>
             </span>
             <span>·</span>
@@ -180,6 +180,11 @@ export function ChatHeader({ thread, project }: Props) {
       </div>
     </header>
   );
+}
+
+function ProviderGlyph({ provider }: { provider: "claude" | "codex" | "opencode" }) {
+  if (provider === "codex") return <CodexMark size={11} />;
+  return <ClaudeMark size={11} />;
 }
 
 function summarizeUsage(thread: Thread): {

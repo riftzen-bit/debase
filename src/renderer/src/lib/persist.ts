@@ -5,6 +5,8 @@ import {
   type Project,
   type Thread,
 } from "../state/types";
+import type { ServiceTier } from "@shared/chat";
+import { defaultModelForProvider, findModel, isReadyProvider, type ProviderId } from "@shared/providers";
 import { newId } from "./id";
 
 const KEY_V1 = "debase.state.v1";
@@ -58,7 +60,7 @@ function reconcile(parsed: Partial<AppState>): AppState {
     selectedProjectId: typeof parsed.selectedProjectId === "string" ? parsed.selectedProjectId : null,
     selectedThreadId: typeof parsed.selectedThreadId === "string" ? parsed.selectedThreadId : null,
     settings: {
-      defaults: { ...DEFAULT_RUN_CONFIG, ...(parsed.settings?.defaults ?? {}) },
+      defaults: repairRunConfig(parsed.settings?.defaults),
       enabledProviders: {
         ...DEFAULT_SETTINGS.enabledProviders,
         ...(parsed.settings?.enabledProviders ?? {}),
@@ -109,12 +111,7 @@ function repairThread(raw: unknown): Thread {
     updatedAt: t.updatedAt ?? Date.now(),
     sessionId: t.sessionId ?? null,
     archivedAt: typeof t.archivedAt === "number" ? t.archivedAt : null,
-    runConfig: {
-      ...DEFAULT_RUN_CONFIG,
-      ...incoming,
-      mode,
-      fullAccess,
-    },
+    runConfig: repairRunConfig({ ...incoming, mode, fullAccess }),
     messages: Array.isArray(t.messages)
       ? t.messages.map((m) => {
           if (m.role === "assistant" && m.status === "streaming") {
@@ -127,6 +124,25 @@ function repairThread(raw: unknown): Thread {
           return m;
         })
       : [],
+  };
+}
+
+function repairRunConfig(raw: unknown): Thread["runConfig"] {
+  const incoming = (raw ?? {}) as Partial<Thread["runConfig"]>;
+  const model = typeof incoming.model === "string" ? findModel(incoming.model) : undefined;
+  const provider =
+    typeof incoming.provider === "string" && isReadyProvider(incoming.provider as ProviderId)
+      ? (incoming.provider as ProviderId)
+      : (model?.provider ?? DEFAULT_RUN_CONFIG.provider);
+  const fallbackModel = defaultModelForProvider(provider);
+  const nextModel = model?.provider === provider ? model.value : fallbackModel.value;
+  const serviceTier: ServiceTier = incoming.serviceTier === "fast" ? "fast" : "standard";
+  return {
+    ...DEFAULT_RUN_CONFIG,
+    ...incoming,
+    provider,
+    model: nextModel,
+    serviceTier,
   };
 }
 

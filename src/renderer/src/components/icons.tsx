@@ -195,6 +195,14 @@ export function SparkleIcon(props: IconProps) {
   );
 }
 
+export function BoltIcon(props: IconProps) {
+  return (
+    <svg {...base(props)}>
+      <path d="M9.5 1.8 4.5 8.5h3L6.5 14.2l5-6.9h-3z" />
+    </svg>
+  );
+}
+
 export function ExternalLinkIcon(props: IconProps) {
   return (
     <svg {...base(props)}>

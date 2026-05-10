@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import type { ProviderId } from "@shared/providers";
 import type { AssistantBlock } from "../state/types";
 import { useStore } from "../state/store";
 import { truncate } from "../lib/format";
@@ -19,6 +20,7 @@ type Props = {
    * "aborted" so the trace tells the truth.
    */
   parentDone?: boolean;
+  provider?: ProviderId;
 };
 
 type OpStatus = "running" | "done" | "error" | "aborted";
@@ -34,7 +36,7 @@ const DEFAULT_VISIBLE = 5;
  * "Agent · {description}" block so sub-agent dispatches are legible at a
  * glance, including how many ran in parallel and which type each was.
  */
-export function Trace({ ops, streaming, parentDone }: Props) {
+export function Trace({ ops, streaming, parentDone, provider = "claude" }: Props) {
   const [expanded, setExpanded] = useState(false);
   if (ops.length === 0) return null;
 
@@ -97,7 +99,12 @@ export function Trace({ ops, streaming, parentDone }: Props) {
           }
           return (
             <li key={`${op.kind}-${realIndex}`}>
-              <OpRow op={op} live={live} parentDone={parentDone === true} />
+              <OpRow
+                op={op}
+                live={live}
+                parentDone={parentDone === true}
+                provider={provider}
+              />
             </li>
           );
         })}
@@ -210,10 +217,12 @@ function OpRow({
   op,
   live,
   parentDone,
+  provider,
 }: {
   op: OpBlock;
   live: boolean;
   parentDone: boolean;
+  provider: ProviderId;
 }) {
   const [open, setOpen] = useState(false);
   const { state, respondToPermission } = useStore();
@@ -277,6 +286,7 @@ function OpRow({
       </button>
       {permission && (
         <ApprovalRow
+          provider={provider}
           permission={permission}
           onAllow={() => void respondToPermission(permission.permId, "allow")}
           onDeny={() => void respondToPermission(permission.permId, "deny")}
@@ -320,10 +330,12 @@ function OpRow({
 }
 
 function ApprovalRow({
+  provider,
   permission,
   onAllow,
   onDeny,
 }: {
+  provider: ProviderId;
   permission: { permId: string; toolName: string; decision?: "allow" | "deny" };
   onAllow: () => void;
   onDeny: () => void;
@@ -335,7 +347,8 @@ function ApprovalRow({
         approval needed
       </span>
       <span className="text-[11.5px] text-ink-2">
-        Allow Claude to run <span className="font-mono">{permission.toolName}</span>?
+        Allow {roleForProvider(provider)} to run{" "}
+        <span className="font-mono">{permission.toolName}</span>?
       </span>
       <div className="ml-auto flex items-center gap-1.5">
         {decided ? (
@@ -372,6 +385,18 @@ function ApprovalRow({
       </div>
     </div>
   );
+}
+
+function roleForProvider(provider: ProviderId): string {
+  switch (provider) {
+    case "codex":
+      return "Codex";
+    case "opencode":
+      return "OpenCode";
+    case "claude":
+    default:
+      return "Claude";
+  }
 }
 
 function deriveStatus(

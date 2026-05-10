@@ -29,6 +29,7 @@ import {
   type SlashCommand,
 } from "./SlashCommandMenu";
 import { truncate } from "../lib/format";
+import { PROVIDER_META } from "@shared/providers";
 
 type SendMode = "queue" | "now";
 const SEND_MODE_KEY = "debase.composer.sendMode";
@@ -123,6 +124,7 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
   }
 
   const { thread, project } = active;
+  const providerLabel = PROVIDER_META[thread.runConfig.provider].shortLabel;
 
   const slashCommands: SlashCommand[] = [
     {
@@ -467,7 +469,7 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
             placeholder={
               threadPending
                 ? "Type to queue or send now…"
-                : "Ask Claude anything · / for commands · @ to attach files"
+                : `Ask ${providerLabel} anything · / for commands · @ to attach files`
             }
             rows={1}
             className="block w-full resize-none rounded-t-xl bg-transparent px-4 pt-3.5 pb-3 font-mono text-[13.5px] leading-relaxed text-ink placeholder:text-ink-3 focus:outline-none"
@@ -478,6 +480,7 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
               <RunControls
                 runConfig={thread.runConfig}
                 disabled={threadPending}
+                enabledProviders={state.settings.enabledProviders}
                 ultrathink={isUltrathink}
                 onChange={(next) => updateThreadRunConfig(thread.id, next)}
               />

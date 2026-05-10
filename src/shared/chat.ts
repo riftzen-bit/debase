@@ -49,7 +49,10 @@ export type ThinkingMode = "adaptive" | "enabled" | "disabled";
 
 export type EffortLevel = "low" | "medium" | "high" | "xhigh" | "max";
 
+export type ServiceTier = "standard" | "fast";
+
 export type RunConfig = {
+  provider: ProviderId;
   model: string;
   fallbackModel?: string;
   mode: RunMode;
@@ -64,6 +67,11 @@ export type RunConfig = {
   thinking: ThinkingMode;
   thinkingBudget?: number;
   context1M: boolean;
+  /**
+   * Codex-only latency tier. `standard` keeps fast mode off; `fast` maps to
+   * Codex CLI's `/fast on` behavior.
+   */
+  serviceTier: ServiceTier;
 };
 
 /**

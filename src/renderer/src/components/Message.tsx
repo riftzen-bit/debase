@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import type { ProviderId } from "@shared/providers";
 import type { AssistantBlock, AssistantMessage, ChatMessage } from "../state/types";
 import { Markdown } from "./Markdown";
 import { Trace } from "./Trace";
@@ -10,9 +11,10 @@ type Props = {
   message: ChatMessage;
   threadId: string;
   cwd?: string;
+  providerFallback?: ProviderId;
 };
 
-export function Message({ message, threadId, cwd }: Props) {
+export function Message({ message, threadId, cwd, providerFallback }: Props) {
   if (message.role === "user") {
     return (
       <article className="grid grid-cols-[72px_1fr] gap-4 border-b border-rule/60 px-6 py-5">
@@ -35,10 +37,11 @@ export function Message({ message, threadId, cwd }: Props) {
       message.status === "error");
 
   const isPlan = message.mode === "plan";
+  const provider = message.provider ?? providerFallback ?? "claude";
 
   return (
     <article className="grid grid-cols-[72px_1fr] gap-4 border-b border-rule/60 px-6 py-5">
-      <RoleLabel role="Claude" tone="accent" />
+      <RoleLabel role={roleForProvider(provider)} tone="accent" />
       <div className="min-w-0 space-y-2">
         {isPlan && <PlanBadge />}
         {grouped.length === 0 && isStreaming && <WorkingIndicator startedAt={message.createdAt} />}
@@ -60,6 +63,7 @@ export function Message({ message, threadId, cwd }: Props) {
               ops={seg.ops}
               streaming={isStreaming && i === grouped.length - 1}
               parentDone={!isStreaming}
+              provider={provider}
             />
           );
         })}
@@ -218,4 +222,16 @@ function RoleLabel({ role, tone }: { role: string; tone?: "accent" }) {
       </div>
     </div>
   );
+}
+
+function roleForProvider(provider: ProviderId): string {
+  switch (provider) {
+    case "codex":
+      return "Codex";
+    case "opencode":
+      return "OpenCode";
+    case "claude":
+    default:
+      return "Claude";
+  }
 }

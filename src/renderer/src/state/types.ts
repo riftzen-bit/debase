@@ -22,6 +22,7 @@ export type UserMessage = {
 export type AssistantMessage = {
   id: string;
   role: "assistant";
+  provider?: ProviderId;
   blocks: AssistantBlock[];
   createdAt: number;
   status: "streaming" | "done" | "error";
@@ -132,17 +133,19 @@ export type AppState = {
 };
 
 export const DEFAULT_RUN_CONFIG: RunConfig = {
+  provider: "claude",
   model: "claude-opus-4-7",
   mode: "build",
   fullAccess: false,
   effort: "high",
   thinking: "adaptive",
   context1M: false,
+  serviceTier: "standard",
 };
 
 export const DEFAULT_SETTINGS: AppSettings = {
   defaults: DEFAULT_RUN_CONFIG,
-  enabledProviders: { claude: true, codex: false, opencode: false },
+  enabledProviders: { claude: true, codex: true, opencode: false },
   editorCommand: "",
   askBeforeTools: false,
 };

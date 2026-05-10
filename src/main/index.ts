@@ -2,6 +2,15 @@ import { app, BrowserWindow } from "electron";
 import { createMainWindow } from "./window";
 import { registerIpcHandlers } from "./ipc";
 
+// Some Windows/sandboxed environments cannot start Chromium's GPU process
+// reliably (`GPU process isn't usable. Goodbye.`). The UI is 2D, so disabling
+// acceleration is fine; `in-process-gpu` handles the Electron/Chromium case
+// where a separate GPU subprocess still fails before the renderer can load.
+app.disableHardwareAcceleration();
+if (process.platform === "win32") {
+  app.commandLine.appendSwitch("in-process-gpu");
+}
+
 let mainWindow: BrowserWindow | null = null;
 
 function getMainWindow(): BrowserWindow | null {
