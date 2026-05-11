@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { Project, Thread } from "../state/types";
 import { useStore } from "../state/store";
-import { findModel } from "@shared/providers";
+import { findModel, type ProviderId } from "@shared/providers";
 import { formatCost, formatDuration, relativeTime, truncate } from "../lib/format";
-import { AgentIcon, ClaudeMark, CodexMark, PinIcon, TrashIcon } from "./icons";
+import { AgentIcon, ClaudeMark, CodexMark, OpenCodeMark, PinIcon, TrashIcon } from "./icons";
 import { ProjectScripts } from "./ProjectScripts";
 
 type Props = {
@@ -12,7 +12,14 @@ type Props = {
 };
 
 export function ChatHeader({ thread, project }: Props) {
-  const { renameThread, deleteThread, setThreadPinned, selectThread, state } = useStore();
+  const {
+    renameThread,
+    deleteThread,
+    setThreadPinned,
+    selectThread,
+    state,
+    providerCatalog,
+  } = useStore();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(thread.title);
   const isPending = state.pendings[thread.id] != null;
@@ -50,7 +57,7 @@ export function ChatHeader({ thread, project }: Props) {
     }
   };
 
-  const model = findModel(thread.runConfig.model);
+  const model = findModel(thread.runConfig.model, providerCatalog, state.settings.modelPreferences);
   const usage = useMemo(() => summarizeUsage(thread), [thread.messages]);
 
   return (
@@ -123,6 +130,14 @@ export function ChatHeader({ thread, project }: Props) {
             <span className="text-ink-3">in</span>
             <span className="font-mono">{project.name}</span>
           </span>
+          {thread.worktreePath && (
+            <span
+              className="hidden max-w-[180px] items-center gap-1.5 rounded-sm border border-accent/40 bg-accent-soft/40 px-1.5 py-0.5 text-[10.5px] text-accent-deep sm:inline-flex"
+              title={thread.worktreePath}
+            >
+              <span className="font-mono">worktree</span>
+            </span>
+          )}
         </div>
 
         <div className="flex shrink-0 items-center gap-1">
@@ -182,8 +197,10 @@ export function ChatHeader({ thread, project }: Props) {
   );
 }
 
-function ProviderGlyph({ provider }: { provider: "claude" | "codex" | "opencode" }) {
+function ProviderGlyph({ provider }: { provider: ProviderId }) {
   if (provider === "codex") return <CodexMark size={11} />;
+  if (provider === "opencode") return <OpenCodeMark size={11} />;
+  if (provider === "cursor") return <AgentIcon size={11} />;
   return <ClaudeMark size={11} />;
 }
 

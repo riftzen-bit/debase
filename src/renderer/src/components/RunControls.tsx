@@ -1,4 +1,5 @@
 import type { EffortLevel, RunConfig, RunMode, ThinkingMode } from "@shared/chat";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   THINKING_BUDGET_DEFAULT,
   THINKING_BUDGET_MAX,
@@ -7,15 +8,20 @@ import {
 import {
   defaultModelForProvider,
   findModel,
-  isReadyProvider,
   modelsForProvider,
   modelSupports1MBeta,
+  providerAvailable,
+  type ProviderCatalog,
+  type ModelPreferencesByProvider,
   PROVIDER_META,
   PROVIDERS,
+  type ModelInfo,
+  type OpenCodeAgentInfo,
   type ProviderId,
 } from "@shared/providers";
 import { Popover, MenuItem, MenuLabel, MenuDivider } from "./Popover";
 import {
+  AgentIcon,
   BarsIcon,
   BoltIcon,
   CheckIcon,
@@ -25,6 +31,7 @@ import {
   EyeIcon,
   LockIcon,
   LockOpenIcon,
+  OpenCodeMark,
   PencilIcon,
   SparkleIcon,
 } from "./icons";
@@ -34,8 +41,11 @@ type Props = {
   disabled?: boolean;
   onChange: (next: Partial<RunConfig>) => void;
   enabledProviders?: Record<ProviderId, boolean>;
+  providerCatalog?: ProviderCatalog;
+  modelPreferences?: ModelPreferencesByProvider;
   /** When true, the Composer's ultrathink hue effect is forwarded to the model pill. */
   ultrathink?: boolean;
+  globalModelPicker?: boolean;
 };
 
 type AccessLevel = "plan" | "supervised" | "auto-edit" | "full-access";
@@ -91,13 +101,26 @@ export function RunControls({
   disabled,
   onChange,
   enabledProviders,
+  providerCatalog,
+  modelPreferences,
   ultrathink,
+  globalModelPicker,
 }: Props) {
-  const model = findModel(runConfig.model);
+  const [modelSearch, setModelSearch] = useState("");
+  const [modelOpen, setModelOpen] = useState(false);
+  const modelSearchRef = useRef<HTMLInputElement | null>(null);
+  const model = findModel(runConfig.model, providerCatalog, modelPreferences);
   const provider = model?.provider ?? runConfig.provider;
-  const providerModels = modelsForProvider(provider);
   const availableProviders = PROVIDERS.filter(
-    (p) => isReadyProvider(p) && (enabledProviders?.[p] ?? true),
+    (p) => providerAvailable(p, providerCatalog) && (enabledProviders?.[p] ?? true),
+  );
+  const pickerModels = useMemo(
+    () => availableProviders.flatMap((p) => modelsForProvider(p, providerCatalog, modelPreferences)),
+    [availableProviders, providerCatalog, modelPreferences],
+  );
+  const filteredPickerModels = useMemo(
+    () => filterModels(pickerModels, modelSearch),
+    [pickerModels, modelSearch],
   );
   // Always include the persisted value in the picker — even if the model
   // registry doesn't list it for the active model. Otherwise a thread saved
@@ -111,6 +134,51 @@ export function RunControls({
   const supportsAdaptive = model?.supportsAdaptiveThinking ?? false;
   const access = deriveAccess(runConfig);
   const accessMeta = ACCESS_LEVELS.find((l) => l.id === access)!;
+  const opencodeAgents = provider === "opencode" ? (providerCatalog?.opencode.agents ?? []) : [];
+  const selectedOpenCodeAgent =
+    opencodeAgents.find((agent) => agent.name === runConfig.opencodeAgent) ?? null;
+
+  useEffect(() => {
+    if (!globalModelPicker) return;
+    const onToggle = () => {
+      if (disabled) return;
+      setModelSearch("");
+      setModelOpen((open) => !open);
+    };
+    window.addEventListener("debase:toggle-model-picker", onToggle);
+    return () => window.removeEventListener("debase:toggle-model-picker", onToggle);
+  }, [disabled, globalModelPicker]);
+
+  useEffect(() => {
+    if (!modelOpen) return;
+    const frame = window.requestAnimationFrame(() => modelSearchRef.current?.focus());
+    return () => window.cancelAnimationFrame(frame);
+  }, [modelOpen]);
+
+  useEffect(() => {
+    if (provider !== "opencode") return;
+    if (!runConfig.opencodeAgent || opencodeAgents.length === 0) return;
+    if (opencodeAgents.some((agent) => agent.name === runConfig.opencodeAgent)) return;
+    onChange({ opencodeAgent: undefined });
+  }, [onChange, opencodeAgents, provider, runConfig.opencodeAgent]);
+
+  useEffect(() => {
+    if (!modelOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      const mod = event.ctrlKey || event.metaKey;
+      if (!mod || event.altKey || event.shiftKey) return;
+      if (!/^[1-9]$/.test(event.key)) return;
+      const selected = filteredPickerModels[Number(event.key) - 1];
+      if (!selected) return;
+      event.preventDefault();
+      event.stopPropagation();
+      chooseModel(selected, runConfig, onChange);
+      setModelSearch("");
+      setModelOpen(false);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [filteredPickerModels, modelOpen, onChange, runConfig]);
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
@@ -137,7 +205,7 @@ export function RunControls({
           <>
             <MenuLabel>Provider</MenuLabel>
             {availableProviders.map((p) => {
-              const nextModel = defaultModelForProvider(p);
+              const nextModel = defaultModelForProvider(p, providerCatalog, modelPreferences);
               return (
                 <MenuItem
                   key={p}
@@ -145,7 +213,10 @@ export function RunControls({
                   icon={<ProviderGlyph provider={p} size={13} />}
                   hint={PROVIDER_META[p].description}
                   onClick={() => {
-                    const nextEffort = adjustEffortForModel(runConfig.effort, nextModel.value);
+                    const nextEffort = adjustEffortForModel(
+                      runConfig.effort,
+                      nextModel,
+                    );
                     const nextThinking =
                       runConfig.thinking === "adaptive" && !nextModel.supportsAdaptiveThinking
                         ? ("enabled" as ThinkingMode)
@@ -156,6 +227,7 @@ export function RunControls({
                       effort: nextEffort,
                       thinking: nextThinking,
                       context1M: false,
+                      opencodeAgent: p === "opencode" ? runConfig.opencodeAgent : undefined,
                     });
                     close();
                   }}
@@ -170,9 +242,19 @@ export function RunControls({
       {/* Model picker — branded with the Claude mark; hue-rotates while ultrathink is active. */}
       <Popover
         align="start"
-        width={300}
+        width={340}
+        open={modelOpen}
+        onOpenChange={(next) => {
+          setModelOpen(next);
+          if (next) setModelSearch("");
+        }}
         trigger={({ toggle, open }) => (
-          <PillButton onClick={toggle} active={open} disabled={disabled} ariaLabel="Choose model">
+          <PillButton
+            onClick={toggle}
+            active={open}
+            disabled={disabled}
+            ariaLabel="Choose model"
+          >
             <span className={ultrathink ? "ultrathink-hue" : ""}>
               <ProviderGlyph provider={provider} size={12} />
             </span>
@@ -184,7 +266,24 @@ export function RunControls({
         {({ close }) => (
           <>
             <MenuLabel>Models</MenuLabel>
-            {providerModels.map((m) => (
+            <div className="sticky top-0 z-10 border-b border-rule bg-canvas px-2 pb-2">
+              <input
+                ref={modelSearchRef}
+                type="search"
+                value={modelSearch}
+                autoFocus
+                placeholder="Search models"
+                spellCheck={false}
+                onChange={(event) => setModelSearch(event.target.value)}
+                className="h-7 w-full rounded-sm border border-rule bg-surface px-2 font-mono text-[12px] text-ink outline-none placeholder:text-ink-3 focus:border-rule-strong"
+              />
+            </div>
+            {filteredPickerModels.length === 0 ? (
+              <div className="px-3 py-3 text-[12px] text-ink-3">
+                No models match.
+              </div>
+            ) : null}
+            {filteredPickerModels.map((m) => (
               <MenuItem
                 key={m.value}
                 active={m.value === runConfig.model}
@@ -195,7 +294,7 @@ export function RunControls({
                   </span>
                 }
                 onClick={() => {
-                  const nextEffort = adjustEffortForModel(runConfig.effort, m.value);
+                  const nextEffort = adjustEffortForModel(runConfig.effort, m);
                   const nextThinking =
                     runConfig.thinking === "adaptive" && !m.supportsAdaptiveThinking
                       ? ("enabled" as ThinkingMode)
@@ -205,6 +304,7 @@ export function RunControls({
                     model: m.value,
                     effort: nextEffort,
                     thinking: nextThinking,
+                    opencodeAgent: m.provider === "opencode" ? runConfig.opencodeAgent : undefined,
                   };
                   // If the new model doesn't support 1M context, the toggle
                   // disappears from the UI — without this the persisted
@@ -214,6 +314,7 @@ export function RunControls({
                     next.context1M = false;
                   }
                   onChange(next);
+                  setModelSearch("");
                   close();
                 }}
               >
@@ -223,6 +324,17 @@ export function RunControls({
           </>
         )}
       </Popover>
+
+      {provider === "opencode" && opencodeAgents.length > 0 && (
+        <OpenCodeAgentPicker
+          agents={opencodeAgents}
+          selectedAgent={selectedOpenCodeAgent}
+          value={runConfig.opencodeAgent}
+          mode={runConfig.mode}
+          disabled={disabled}
+          onChange={(opencodeAgent) => onChange({ opencodeAgent })}
+        />
+      )}
 
       {/* Access picker — sandboxed / auto-edit / full access. */}
       <Popover
@@ -461,6 +573,78 @@ export function RunControls({
   );
 }
 
+function OpenCodeAgentPicker({
+  agents,
+  selectedAgent,
+  value,
+  mode,
+  disabled,
+  onChange,
+}: {
+  agents: OpenCodeAgentInfo[];
+  selectedAgent: OpenCodeAgentInfo | null;
+  value?: string;
+  mode: RunMode;
+  disabled?: boolean;
+  onChange: (agent: string | undefined) => void;
+}) {
+  const fallbackLabel = mode === "plan" ? "Plan" : "Auto";
+  const buttonLabel = selectedAgent?.displayName ?? fallbackLabel;
+
+  return (
+    <Popover
+      align="start"
+      width={260}
+      trigger={({ toggle, open }) => (
+        <PillButton
+          onClick={toggle}
+          active={open}
+          disabled={disabled}
+          ariaLabel="Choose OpenCode agent"
+        >
+          <span className="text-ink-3">
+            <AgentIcon size={11} />
+          </span>
+          <span className="text-ink">{buttonLabel}</span>
+          <Chevron />
+        </PillButton>
+      )}
+    >
+      {({ close }) => (
+        <>
+          <MenuLabel>OpenCode agent</MenuLabel>
+          <MenuItem
+            active={!value}
+            icon={<AgentIcon size={13} />}
+            hint="Use OpenCode's default agent for the current mode."
+            onClick={() => {
+              onChange(undefined);
+              close();
+            }}
+          >
+            {fallbackLabel}
+          </MenuItem>
+          <MenuDivider />
+          {agents.map((agent) => (
+            <MenuItem
+              key={agent.name}
+              active={agent.name === value}
+              icon={<AgentIcon size={13} />}
+              hint={agent.description}
+              onClick={() => {
+                onChange(agent.name);
+                close();
+              }}
+            >
+              {agent.displayName}
+            </MenuItem>
+          ))}
+        </>
+      )}
+    </Popover>
+  );
+}
+
 function PillButton({
   children,
   onClick,
@@ -515,6 +699,8 @@ function Chevron() {
 
 function ProviderGlyph({ provider, size }: { provider: ProviderId; size: number }) {
   if (provider === "codex") return <CodexMark size={size} />;
+  if (provider === "opencode") return <OpenCodeMark size={size} />;
+  if (provider === "cursor") return <AgentIcon size={size} />;
   return <ClaudeMark size={size} />;
 }
 
@@ -550,9 +736,54 @@ function fmtContext(c: number): string {
   return `${c}`;
 }
 
-function adjustEffortForModel(current: EffortLevel, modelId: string): EffortLevel {
-  const m = findModel(modelId);
-  if (!m) return current;
-  if (m.supportedEffortLevels.includes(current)) return current;
+function filterModels(models: ModelInfo[], query: string): ModelInfo[] {
+  const tokens = query
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (tokens.length === 0) return models;
+
+  return models.filter((model) => {
+    const provider = PROVIDER_META[model.provider];
+    const haystack = [
+      model.displayName,
+      model.value,
+      model.description,
+      provider.label,
+      provider.shortLabel,
+    ]
+      .join(" ")
+      .toLowerCase();
+    return tokens.every((token) => haystack.includes(token));
+  });
+}
+
+function adjustEffortForModel(current: EffortLevel, model: { supportedEffortLevels: EffortLevel[] }): EffortLevel {
+  if (model.supportedEffortLevels.includes(current)) return current;
   return "high";
+}
+
+function chooseModel(
+  model: ModelInfo,
+  runConfig: RunConfig,
+  onChange: (next: Partial<RunConfig>) => void,
+): void {
+  const nextEffort = adjustEffortForModel(runConfig.effort, model);
+  const nextThinking =
+    runConfig.thinking === "adaptive" && !model.supportsAdaptiveThinking
+      ? ("enabled" as ThinkingMode)
+      : runConfig.thinking;
+  const next: Partial<RunConfig> = {
+    provider: model.provider,
+    model: model.value,
+    effort: nextEffort,
+    thinking: nextThinking,
+    opencodeAgent: model.provider === "opencode" ? runConfig.opencodeAgent : undefined,
+  };
+  if (runConfig.context1M && !modelSupports1MBeta(model.value)) {
+    next.context1M = false;
+  }
+  onChange(next);
 }

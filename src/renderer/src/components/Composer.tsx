@@ -5,6 +5,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import type { ChatMessage } from "../state/types";
+import type { ProjectFileSearchEntry, ProjectSkillEntry } from "@shared/chat";
 import { useActiveThread, useStore } from "../state/store";
 import {
   ArchiveIcon,
@@ -13,6 +14,7 @@ import {
   ComposeIcon,
   CopyIcon,
   ExternalLinkIcon,
+  EyeIcon,
   GearIcon,
   LockIcon,
   LockOpenIcon,
@@ -20,6 +22,8 @@ import {
   SparkleIcon,
   StopIcon,
   TasksIcon,
+  TerminalIcon,
+  DiffIcon,
 } from "./icons";
 import { MenuItem, MenuLabel, Popover } from "./Popover";
 import { RunControls } from "./RunControls";
@@ -29,6 +33,13 @@ import {
   type SlashCommand,
 } from "./SlashCommandMenu";
 import { truncate } from "../lib/format";
+import { FileIcon } from "../lib/fileIcons";
+import { threadCwd } from "../lib/workdir";
+import {
+  appendTerminalContextsToPrompt,
+  formatTerminalContextLabel,
+  type TerminalContextDraft,
+} from "../lib/terminalContext";
 import { PROVIDER_META } from "@shared/providers";
 
 type SendMode = "queue" | "now";
@@ -59,11 +70,38 @@ type Props = {
   /** Tasks panel visibility (right-side TodoWrite mirror). */
   tasksOpen: boolean;
   onToggleTasks: () => void;
+  /** Plan panel visibility (latest plan-mode answer). */
+  planOpen: boolean;
+  onTogglePlan: () => void;
+  /** Git working-tree diff panel visibility. */
+  diffOpen: boolean;
+  onToggleDiff: () => void;
+  /** Bottom PTY drawer, scoped to the current thread cwd. */
+  terminalOpen: boolean;
+  onToggleTerminal: () => void;
+  terminalContexts: TerminalContextDraft[];
+  onRemoveTerminalContext: (id: string) => void;
+  onClearTerminalContexts: (threadId: string) => void;
 };
 
-export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Props) {
+export function Composer({
+  locked,
+  onToggleLock,
+  tasksOpen,
+  onToggleTasks,
+  planOpen,
+  onTogglePlan,
+  diffOpen,
+  onToggleDiff,
+  terminalOpen,
+  onToggleTerminal,
+  terminalContexts,
+  onRemoveTerminalContext,
+  onClearTerminalContexts,
+}: Props) {
   const {
     state,
+    providerCatalog,
     sendPrompt,
     sendNow,
     enqueuePrompt,
@@ -82,18 +120,33 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
   };
   const [sendMode, setSendMode] = useState<SendMode>(readSendMode);
   const [slashIndex, setSlashIndex] = useState(0);
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [skillIndex, setSkillIndex] = useState(0);
+  const [mentionEntries, setMentionEntries] = useState<ProjectFileSearchEntry[]>([]);
+  const [skillEntries, setSkillEntries] = useState<ProjectSkillEntry[]>([]);
+  const [cursor, setCursor] = useState(0);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const mentionSearchSeq = useRef(0);
+  const skillSearchSeq = useRef(0);
 
   const hasThread = active !== null;
+  const cwd = active ? threadCwd(active.project, active.thread) : "";
   const threadPending = active ? state.pendings[active.thread.id] != null : false;
   const queuedPrompt = active?.thread.queuedPrompt ?? null;
   const trimmed = draft.trim();
+  const hasTerminalContexts = terminalContexts.length > 0;
   const isUltrathink = /\bultrathink\b/i.test(draft);
   // Match against raw draft (no trim) so a trailing space dismisses the
   // menu — once the user has typed past the command, they're writing prose.
   const slashOpen = /^\/[\w-]*$/.test(draft);
   const slashQuery = slashOpen ? draft.slice(1) : "";
-  const atOpen = draft === "@";
+  const skillTrigger = !slashOpen ? detectSkillMention(draft, cursor) : null;
+  const skillOpen = skillTrigger !== null;
+  const skillQuery = skillTrigger?.query ?? "";
+  const mentionTrigger = !slashOpen && !skillOpen ? detectPathMention(draft, cursor) : null;
+  const mentionOpen = mentionTrigger !== null;
+  const mentionQuery = mentionTrigger?.query ?? "";
+  const atOpen = mentionOpen && mentionQuery.length === 0;
 
   useEffect(() => {
     autoResize(taRef.current);
@@ -104,8 +157,48 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
   }, [slashQuery, slashOpen]);
 
   useEffect(() => {
+    setMentionIndex(0);
+  }, [mentionQuery, mentionOpen]);
+
+  useEffect(() => {
+    setSkillIndex(0);
+  }, [skillQuery, skillOpen]);
+
+  useEffect(() => {
+    const seq = ++mentionSearchSeq.current;
+    if (!mentionOpen || !cwd) {
+      setMentionEntries([]);
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void window.api.project
+        .searchFiles({ projectPath: cwd, query: mentionQuery, limit: 30 })
+        .then((res) => {
+          if (seq !== mentionSearchSeq.current) return;
+          setMentionEntries(res.ok ? res.entries : []);
+        });
+    }, 120);
+    return () => window.clearTimeout(timer);
+  }, [cwd, mentionOpen, mentionQuery]);
+
+  useEffect(() => {
+    const seq = ++skillSearchSeq.current;
+    if (!skillOpen) return;
+    const timer = window.setTimeout(() => {
+      void window.api.project
+        .listSkills({ projectPath: cwd || undefined })
+        .then((res) => {
+          if (seq !== skillSearchSeq.current) return;
+          setSkillEntries(res.ok ? res.skills : []);
+        });
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [cwd, skillOpen, skillQuery]);
+
+  useEffect(() => {
     if (hasThread) {
       taRef.current?.focus();
+      setCursor(taRef.current?.selectionStart ?? draft.length);
     }
   }, [hasThread, state.selectedThreadId]);
 
@@ -167,11 +260,11 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
       id: "cwd",
       trigger: "/cwd",
       description: "Open project folder",
-      hint: project.path || "no path",
+      hint: cwd || "no path",
       icon: <ExternalLinkIcon size={12} />,
-      disabled: !project.path,
+      disabled: !cwd,
       run: () => {
-        if (project.path) void window.api.shell.openPath(project.path);
+        if (cwd) void window.api.shell.openPath(cwd);
         setDraft("");
       },
     },
@@ -181,12 +274,12 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
       description: "Open project in your editor",
       hint: state.settings.editorCommand ? state.settings.editorCommand : "configure in settings",
       icon: <ExternalLinkIcon size={12} />,
-      disabled: !project.path || !state.settings.editorCommand,
+      disabled: !cwd || !state.settings.editorCommand,
       run: () => {
-        if (project.path && state.settings.editorCommand) {
+        if (cwd && state.settings.editorCommand) {
           void window.api.shell.openInEditor({
             editorCommand: state.settings.editorCommand,
-            path: project.path,
+            path: cwd,
           });
         }
         setDraft("");
@@ -209,6 +302,46 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
       icon: <TasksIcon size={12} />,
       run: () => {
         onToggleTasks();
+        setDraft("");
+      },
+    },
+    {
+      id: "plans",
+      trigger: "/plans",
+      description: planOpen ? "Hide plan panel" : "Show latest plan",
+      icon: <EyeIcon size={12} />,
+      run: () => {
+        onTogglePlan();
+        setDraft("");
+      },
+    },
+    {
+      id: "diff",
+      trigger: "/diff",
+      description: diffOpen ? "Hide diff panel" : "Show git diff",
+      icon: <DiffIcon size={12} />,
+      run: () => {
+        onToggleDiff();
+        setDraft("");
+      },
+    },
+    {
+      id: "model",
+      trigger: "/model",
+      description: "Open model picker",
+      icon: <GearIcon size={12} />,
+      run: () => {
+        window.dispatchEvent(new CustomEvent("debase:toggle-model-picker"));
+        setDraft("");
+      },
+    },
+    {
+      id: "terminal",
+      trigger: "/terminal",
+      description: terminalOpen ? "Hide terminal" : "Show terminal",
+      icon: <TerminalIcon size={12} />,
+      run: () => {
+        onToggleTerminal();
         setDraft("");
       },
     },
@@ -267,23 +400,60 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
   ];
 
   const filteredSlash = filterSlashCommands(slashCommands, slashQuery);
+  const filteredSkills = filterSkillEntries(skillEntries, skillQuery);
+
+  const syncCursor = () => {
+    setCursor(taRef.current?.selectionStart ?? draft.length);
+  };
 
   const pickFiles = async () => {
     const result = await window.api.dialog.chooseFiles({
-      defaultPath: project.path || undefined,
+      defaultPath: cwd || undefined,
       multi: true,
     });
     if (!result.ok) return;
-    const formatted = result.paths.map((p) => formatMentionPath(p, project.path)).join(" ");
+    const formatted = result.paths.map((p) => formatMentionPath(p, cwd)).join(" ");
     setDraft(formatted);
     taRef.current?.focus();
   };
 
   const appendMention = (path: string) => {
-    const token = formatMentionPath(path, project.path);
+    const token = formatMentionPath(path, cwd);
     const current = active.thread.draft ?? "";
     const sep = current.length > 0 && !/\s$/.test(current) ? " " : "";
     setDraft(current + sep + token + " ");
+  };
+
+  const insertMentionPath = (relativePath: string) => {
+    const trigger = detectPathMention(active.thread.draft ?? "", taRef.current?.selectionStart ?? cursor);
+    if (!trigger) {
+      appendMention(relativePath);
+      return;
+    }
+    const next = replaceTextRange(active.thread.draft ?? "", trigger.rangeStart, trigger.rangeEnd, `@${relativePath} `);
+    setDraft(next.text);
+    window.requestAnimationFrame(() => {
+      taRef.current?.focus();
+      taRef.current?.setSelectionRange(next.cursor, next.cursor);
+      setCursor(next.cursor);
+    });
+  };
+
+  const insertSkill = (skill: ProjectSkillEntry) => {
+    const trigger = detectSkillMention(active.thread.draft ?? "", taRef.current?.selectionStart ?? cursor);
+    if (!trigger) return;
+    const next = replaceTextRange(
+      active.thread.draft ?? "",
+      trigger.rangeStart,
+      trigger.rangeEnd,
+      `$${skill.name} `,
+    );
+    setDraft(next.text);
+    window.requestAnimationFrame(() => {
+      taRef.current?.focus();
+      taRef.current?.setSelectionRange(next.cursor, next.cursor);
+      setCursor(next.cursor);
+    });
   };
 
   const handleImageFile = async (file: File) => {
@@ -339,27 +509,31 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
   };
 
   const submit = async (mode: SendMode) => {
-    if (!trimmed) return;
+    if (!trimmed && !hasTerminalContexts) return;
     // Pin the destination thread up-front so a mid-await thread switch can't
     // redirect this send to whichever thread is currently selected.
     const targetThreadId = thread.id;
+    const materializedText = appendTerminalContextsToPrompt(draft, terminalContexts);
     if (!threadPending) {
       const text = draft;
       setDraft("");
-      const status = await sendPrompt(text, targetThreadId);
+      const status = await sendPrompt(materializedText, targetThreadId);
       if (status === "failed") setDraft(text);
+      else onClearTerminalContexts(targetThreadId);
       return;
     }
     if (mode === "queue") {
-      enqueuePrompt(trimmed, targetThreadId);
+      enqueuePrompt(materializedText, targetThreadId);
       setDraft("");
+      onClearTerminalContexts(targetThreadId);
       return;
     }
     // mode === "now": cancel current + send new with same session.
     const text = draft;
     setDraft("");
-    const status = await sendNow(text, targetThreadId);
+    const status = await sendNow(materializedText, targetThreadId);
     if (status === "failed") setDraft(text);
+    else onClearTerminalContexts(targetThreadId);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -389,10 +563,47 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
       }
     }
 
-    if (atOpen && e.key === "Tab") {
-      e.preventDefault();
-      void pickFiles();
-      return;
+    if (skillOpen) {
+      if (e.key === "ArrowDown" && filteredSkills.length > 0) {
+        e.preventDefault();
+        setSkillIndex((i) => Math.min(filteredSkills.length - 1, i + 1));
+        return;
+      }
+      if (e.key === "ArrowUp" && filteredSkills.length > 0) {
+        e.preventDefault();
+        setSkillIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+      if ((e.key === "Enter" || e.key === "Tab") && filteredSkills.length > 0) {
+        e.preventDefault();
+        const skill = filteredSkills[skillIndex];
+        if (skill) insertSkill(skill);
+        return;
+      }
+    }
+
+    if (mentionOpen) {
+      if (e.key === "ArrowDown" && mentionEntries.length > 0) {
+        e.preventDefault();
+        setMentionIndex((i) => Math.min(mentionEntries.length - 1, i + 1));
+        return;
+      }
+      if (e.key === "ArrowUp" && mentionEntries.length > 0) {
+        e.preventDefault();
+        setMentionIndex((i) => Math.max(0, i - 1));
+        return;
+      }
+      if ((e.key === "Enter" || e.key === "Tab") && mentionEntries.length > 0) {
+        e.preventDefault();
+        const entry = mentionEntries[mentionIndex];
+        if (entry) insertMentionPath(entry.path);
+        return;
+      }
+      if (atOpen && e.key === "Tab") {
+        e.preventDefault();
+        void pickFiles();
+        return;
+      }
     }
 
     if (e.key === "Enter" && !e.shiftKey) {
@@ -424,7 +635,7 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
     }
   };
 
-  const buttonDisabled = trimmed.length === 0;
+  const buttonDisabled = trimmed.length === 0 && !hasTerminalContexts;
 
   return (
     <div className="border-t border-rule bg-canvas">
@@ -460,28 +671,58 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
               taRef.current?.focus();
             }}
           />
+          <SkillMentionMenu
+            open={skillOpen && !slashOpen}
+            query={skillQuery}
+            entries={filteredSkills}
+            active={skillIndex}
+            onActiveChange={setSkillIndex}
+            onSelect={insertSkill}
+          />
+          <FileMentionMenu
+            open={mentionOpen && !slashOpen && !skillOpen}
+            query={mentionQuery}
+            entries={mentionEntries}
+            active={mentionIndex}
+            onActiveChange={setMentionIndex}
+            onSelect={(entry) => insertMentionPath(entry.path)}
+            onPickFiles={() => void pickFiles()}
+          />
+          <PendingTerminalContexts
+            contexts={terminalContexts}
+            onRemove={onRemoveTerminalContext}
+          />
           <textarea
             ref={taRef}
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              setCursor(e.currentTarget.selectionStart);
+            }}
             onKeyDown={onKeyDown}
+            onKeyUp={syncCursor}
+            onClick={syncCursor}
+            onSelect={syncCursor}
             onPaste={onPaste}
             placeholder={
               threadPending
                 ? "Type to queue or send now…"
-                : `Ask ${providerLabel} anything · / for commands · @ to attach files`
+                : `Ask ${providerLabel} anything · / commands · @ files · $ skills`
             }
             rows={1}
             className="block w-full resize-none rounded-t-xl bg-transparent px-4 pt-3.5 pb-3 font-mono text-[13.5px] leading-relaxed text-ink placeholder:text-ink-3 focus:outline-none"
           />
 
-          <div className="flex items-start gap-2 border-t border-rule/60 px-2.5 py-2">
+          <div className="flex flex-col gap-2 border-t border-rule/60 px-2.5 py-2 sm:flex-row sm:items-start">
             <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
               <RunControls
                 runConfig={thread.runConfig}
                 disabled={threadPending}
                 enabledProviders={state.settings.enabledProviders}
+                providerCatalog={providerCatalog}
+                modelPreferences={state.settings.modelPreferences}
                 ultrathink={isUltrathink}
+                globalModelPicker
                 onChange={(next) => updateThreadRunConfig(thread.id, next)}
               />
               {isUltrathink && (
@@ -492,7 +733,10 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
               )}
             </div>
 
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
+              <TerminalToggle open={terminalOpen} onToggle={onToggleTerminal} />
+              <DiffToggle open={diffOpen} onToggle={onToggleDiff} />
+              <PlanToggle open={planOpen} onToggle={onTogglePlan} />
               <TasksToggle open={tasksOpen} onToggle={onToggleTasks} />
               <LockToggle locked={locked} onToggle={onToggleLock} />
 
@@ -529,7 +773,11 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
 
         <div className="mt-1.5 flex items-center justify-between gap-3 px-1 text-[10.5px] text-ink-3">
           <div className="flex items-center gap-3">
-            {atOpen ? (
+            {skillOpen ? (
+              <span className="text-accent-deep">
+                <kbd className="font-mono">tab</kbd> choose a skill
+              </span>
+            ) : atOpen ? (
               <span className="text-accent-deep">
                 <kbd className="font-mono">tab</kbd> pick a file
               </span>
@@ -554,6 +802,63 @@ export function Composer({ locked, onToggleLock, tasksOpen, onToggleTasks }: Pro
         </div>
       </div>
     </div>
+  );
+}
+
+function TerminalToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={open}
+      title={open ? "Hide terminal" : "Show terminal"}
+      className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-[11.5px] transition-colors ${
+        open
+          ? "border-accent/60 bg-accent-soft/60 text-accent-deep hover:bg-accent-soft"
+          : "border-rule bg-canvas text-ink-3 hover:border-rule-strong hover:bg-surface hover:text-ink-2"
+      }`}
+    >
+      <TerminalIcon size={12} />
+      <span className="font-mono">term</span>
+    </button>
+  );
+}
+
+function DiffToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={open}
+      title={open ? "Hide diff panel" : "Show git diff"}
+      className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-[11.5px] transition-colors ${
+        open
+          ? "border-accent/60 bg-accent-soft/60 text-accent-deep hover:bg-accent-soft"
+          : "border-rule bg-canvas text-ink-3 hover:border-rule-strong hover:bg-surface hover:text-ink-2"
+      }`}
+    >
+      <DiffIcon size={12} />
+      <span className="font-mono">diff</span>
+    </button>
+  );
+}
+
+function PlanToggle({ open, onToggle }: { open: boolean; onToggle: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={open}
+      title={open ? "Hide Plan panel" : "Show latest plan"}
+      className={`inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-[11.5px] transition-colors ${
+        open
+          ? "border-accent/60 bg-accent-soft/60 text-accent-deep hover:bg-accent-soft"
+          : "border-rule bg-canvas text-ink-3 hover:border-rule-strong hover:bg-surface hover:text-ink-2"
+      }`}
+    >
+      <EyeIcon size={12} />
+      <span className="font-mono">plan</span>
+    </button>
   );
 }
 
@@ -615,6 +920,35 @@ function QueuedBanner({ text, onCancel }: { text: string; onCancel: () => void }
       >
         <CloseIcon size={11} />
       </button>
+    </div>
+  );
+}
+
+function PendingTerminalContexts({
+  contexts,
+  onRemove,
+}: {
+  contexts: TerminalContextDraft[];
+  onRemove: (id: string) => void;
+}) {
+  if (contexts.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5 border-b border-rule/60 px-3 py-2">
+      {contexts.map((context) => (
+        <button
+          key={context.id}
+          type="button"
+          title={context.text}
+          onClick={() => onRemove(context.id)}
+          className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-rule bg-canvas px-2 py-1 text-[11px] text-ink-2 transition-colors hover:border-rule-strong hover:bg-surface"
+        >
+          <TerminalIcon size={11} />
+          <span className="min-w-0 truncate font-mono">
+            {formatTerminalContextLabel(context)}
+          </span>
+          <CloseIcon size={10} />
+        </button>
+      ))}
     </div>
   );
 }
@@ -689,12 +1023,174 @@ function SendSplitButton({
   );
 }
 
+function SkillMentionMenu({
+  open,
+  query,
+  entries,
+  active,
+  onActiveChange,
+  onSelect,
+}: {
+  open: boolean;
+  query: string;
+  entries: ProjectSkillEntry[];
+  active: number;
+  onActiveChange: (next: number) => void;
+  onSelect: (entry: ProjectSkillEntry) => void;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const child = listRef.current?.children[active] as HTMLElement | undefined;
+    child?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="absolute bottom-full left-0 right-0 mb-2 z-30">
+      <div className="overflow-hidden rounded-md border border-rule-strong bg-canvas shadow-md">
+        <div className="border-b border-rule px-3 py-1.5 font-mono text-[11px] italic text-ink-3">
+          skill
+          {query && <span className="ml-1.5 not-italic text-ink-2">{query}</span>}
+        </div>
+        {entries.length === 0 ? (
+          <div className="px-3 py-3 text-[12px] text-ink-3">
+            {query ? "No matching skills." : "No local skills found."}
+          </div>
+        ) : (
+          <div ref={listRef} className="max-h-64 overflow-y-auto py-1">
+            {entries.map((entry, i) => {
+              const isActive = i === active;
+              return (
+                <button
+                  key={`${entry.scope}:${entry.path}`}
+                  type="button"
+                  onMouseEnter={() => onActiveChange(i)}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    onSelect(entry);
+                  }}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${
+                    isActive ? "bg-surface" : "hover:bg-surface/60"
+                  }`}
+                >
+                  <span className="flex h-4 w-4 shrink-0 items-center justify-center text-ink-3">
+                    <SparkleIcon size={12} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-mono text-[12px] text-accent-deep">
+                      ${entry.name}
+                    </span>
+                    {entry.shortDescription && (
+                      <span className="mt-0.5 block truncate text-[11px] text-ink-3">
+                        {entry.shortDescription}
+                      </span>
+                    )}
+                  </span>
+                  <span className="shrink-0 font-mono text-[10.5px] text-ink-3">
+                    {entry.scope}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FileMentionMenu({
+  open,
+  query,
+  entries,
+  active,
+  onActiveChange,
+  onSelect,
+  onPickFiles,
+}: {
+  open: boolean;
+  query: string;
+  entries: ProjectFileSearchEntry[];
+  active: number;
+  onActiveChange: (next: number) => void;
+  onSelect: (entry: ProjectFileSearchEntry) => void;
+  onPickFiles: () => void;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const child = listRef.current?.children[active] as HTMLElement | undefined;
+    child?.scrollIntoView({ block: "nearest" });
+  }, [active, open]);
+
+  if (!open) return null;
+
+  return (
+    <div className="absolute bottom-full left-0 right-0 mb-2 z-30">
+      <div className="overflow-hidden rounded-md border border-rule-strong bg-canvas shadow-md">
+        <div className="flex items-center justify-between gap-3 border-b border-rule px-3 py-1.5">
+          <span className="font-mono text-[11px] italic text-ink-3">
+            file mention
+            {query && <span className="ml-1.5 not-italic text-ink-2">{query}</span>}
+          </span>
+          <button
+            type="button"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              onPickFiles();
+            }}
+            className="rounded-sm border border-rule bg-surface/40 px-2 py-0.5 text-[10.5px] text-ink-2 transition-colors hover:bg-surface"
+          >
+            pick file
+          </button>
+        </div>
+        {entries.length === 0 ? (
+          <div className="px-3 py-3 text-[12px] text-ink-3">
+            {query ? "No matching files." : "Type to search files, or pick a file."}
+          </div>
+        ) : (
+          <div ref={listRef} className="max-h-64 overflow-y-auto py-1">
+            {entries.map((entry, i) => {
+              const isActive = i === active;
+              return (
+                <button
+                  key={entry.path}
+                  type="button"
+                  onMouseEnter={() => onActiveChange(i)}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    onSelect(entry);
+                  }}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors ${
+                    isActive ? "bg-surface" : "hover:bg-surface/60"
+                  }`}
+                >
+                  <span className="shrink-0 text-ink-3">
+                    <FileIcon name={entry.path} size={12} />
+                  </span>
+                  <span className="min-w-0 flex-1 truncate font-mono text-[12px] text-ink-2">
+                    {entry.path}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function PathHint() {
   const active = useActiveThread();
   if (!active) return null;
-  const { project } = active;
-  if (!project.path) return <span>no working directory</span>;
-  return <span className="truncate font-mono">cwd · {project.path}</span>;
+  const cwd = threadCwd(active.project, active.thread);
+  if (!cwd) return <span>no working directory</span>;
+  return <span className="truncate font-mono">cwd · {cwd}</span>;
 }
 
 function autoResize(el: HTMLTextAreaElement | null) {
@@ -713,6 +1209,85 @@ function formatMentionPath(filePath: string, projectPath: string): string {
     return `@${f.slice(p.length + 1)}`;
   }
   return `@${f}`;
+}
+
+function detectPathMention(
+  text: string,
+  cursorInput: number,
+): { query: string; rangeStart: number; rangeEnd: number } | null {
+  const cursor = Math.max(0, Math.min(text.length, Math.floor(cursorInput)));
+  const beforeCursor = text.slice(0, cursor);
+  const tokenStart = Math.max(
+    beforeCursor.lastIndexOf(" "),
+    beforeCursor.lastIndexOf("\n"),
+    beforeCursor.lastIndexOf("\t"),
+  ) + 1;
+  const token = text.slice(tokenStart, cursor);
+  if (!token.startsWith("@")) return null;
+  if (token.slice(1).includes("@")) return null;
+  return {
+    query: token.slice(1),
+    rangeStart: tokenStart,
+    rangeEnd: cursor,
+  };
+}
+
+function detectSkillMention(
+  text: string,
+  cursorInput: number,
+): { query: string; rangeStart: number; rangeEnd: number } | null {
+  const cursor = Math.max(0, Math.min(text.length, Math.floor(cursorInput)));
+  const beforeCursor = text.slice(0, cursor);
+  const tokenStart = Math.max(
+    beforeCursor.lastIndexOf(" "),
+    beforeCursor.lastIndexOf("\n"),
+    beforeCursor.lastIndexOf("\t"),
+  ) + 1;
+  const token = text.slice(tokenStart, cursor);
+  if (!token.startsWith("$")) return null;
+  if (token.slice(1).includes("$")) return null;
+  return {
+    query: token.slice(1),
+    rangeStart: tokenStart,
+    rangeEnd: cursor,
+  };
+}
+
+function filterSkillEntries(entries: ProjectSkillEntry[], query: string): ProjectSkillEntry[] {
+  const normalized = query.trim().replace(/^\$+/, "").toLowerCase();
+  if (!normalized) return entries.slice(0, 40);
+  return entries
+    .map((entry, index) => {
+      const haystack = [
+        entry.name,
+        entry.displayName,
+        entry.shortDescription ?? "",
+        entry.description ?? "",
+        entry.scope,
+      ].join(" ").toLowerCase();
+      const name = entry.name.toLowerCase();
+      let rank = Number.POSITIVE_INFINITY;
+      if (name === normalized) rank = 0;
+      else if (name.startsWith(normalized)) rank = 1;
+      else if (haystack.includes(normalized)) rank = 2;
+      return { entry, index, rank };
+    })
+    .filter((item) => Number.isFinite(item.rank))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .slice(0, 40)
+    .map((item) => item.entry);
+}
+
+function replaceTextRange(
+  text: string,
+  rangeStart: number,
+  rangeEnd: number,
+  replacement: string,
+): { text: string; cursor: number } {
+  const safeStart = Math.max(0, Math.min(text.length, rangeStart));
+  const safeEnd = Math.max(safeStart, Math.min(text.length, rangeEnd));
+  const nextText = `${text.slice(0, safeStart)}${replacement}${text.slice(safeEnd)}`;
+  return { text: nextText, cursor: safeStart + replacement.length };
 }
 
 function fileToBase64(file: File): Promise<string> {

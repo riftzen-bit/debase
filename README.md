@@ -1,13 +1,84 @@
 # debase
 
-Desktop GUI shell that wraps the Claude Code CLI (and, eventually, Codex and
-OpenCode) into one Electron app. The agent's behavior is left untouched —
+Desktop GUI shell that wraps Claude Code, OpenAI Codex, OpenCode, and Cursor CLI
+into one Electron app.
+The agent's behavior is left untouched —
 debase is a thin UI layer, not a re-implementation. Threads are organized by
 project, and each project's path becomes the agent's working directory.
 
-Currently shipping with the Claude provider only. Codex and OpenCode appear
-in the Settings → Providers list as placeholders; their toggles unlock when
-their CLI bridges land.
+Currently shipping with Claude, Codex, OpenCode, and Cursor providers. Each
+provider reuses that tool's own local login. OpenCode models are discovered at
+runtime from the user's local `opencode` CLI; Cursor models are discovered from
+the local authenticated `agent` command. debase does not show OpenCode or Cursor
+models unless the matching local CLI reports that it is available.
+
+For Git projects, debase also shows the active branch, upstream, ahead/behind
+state, and dirty-file counts directly under the chat header so a coding-agent
+turn stays anchored to the checkout it is editing. The dirty-file popover can
+open a read-only unified diff for each changed file. Threads can also create a
+branch from the current checkout, switch refs, or create a dedicated git
+worktree from a selected base ref and switch their cwd to it.
+
+The full diff panel opens with `Ctrl/Cmd+D` (or `/diff`) when the terminal is
+not focused. It reads the same git status/diff IPC as the status bar, supports
+per-file or whole-working-tree views, and becomes a full-width sheet on narrow
+viewports.
+
+Settings includes a Source control page that scans the active checkout's git
+remotes and local provider auth. It detects GitHub, GitLab, Bitbucket, and
+Azure DevOps setup state before publish or review flows mutate git state.
+Settings also includes a Diagnostics page that reads live environment,
+provider-catalog, local-skill, keybinding, and source-control health through
+the same IPC paths used by the app. Its snapshot button copies those checks as
+JSON for bug reports.
+Archived threads can be reviewed from Settings > Archived, where they can be
+opened, restored to their project, or deleted.
+The command palette can open Settings subsections directly, including
+Providers, Source control, Archived, Diagnostics, and Shortcuts.
+The Shortcuts page has an in-page filter for command names, descriptions,
+keys, scopes, and `when` clauses before remapping a binding. It can also add
+or delete raw `{ "key", "command", "when" }` rules for command-specific
+shortcuts that do not fit a single default row. `Ctrl/Cmd+O` opens the active
+thread cwd in the configured editor.
+The command palette can also clone a Git URL/local path, GitHub `owner/repo`,
+GitLab `group/project`, Bitbucket `workspace/repository`, or Azure DevOps
+`project/repository` into a selected folder and add the new checkout as a
+debase project. Hosted repository lookup uses the user's authenticated local
+provider setup on the machine running debase.
+
+The model picker opens with `Ctrl/Cmd+Shift+M` or `/model`. It searches across
+all enabled providers that are actually available, so OpenCode and Cursor
+entries only appear when their local CLI catalogs report usable auth. Settings
+can favorite or hide models per provider, and Claude/Codex can add custom model
+slugs. OpenCode and Cursor intentionally cannot add custom slugs; they only show
+models reported by the user's local CLI.
+
+Provider settings also expose the runtime paths used by the local tools:
+Claude has `binaryPath`, `homePath`, and launch args; Codex has `binaryPath`,
+`homePath`, and `shadowHomePath`; OpenCode has `binaryPath`, `serverUrl`, and
+`serverPassword`; Cursor has `binaryPath` and `apiEndpoint`. These settings
+only point debase at the user's installed, logged-in tools. They do not create
+accounts, add fallback catalogs, or unlock OpenCode/Cursor models that the local
+CLI cannot report.
+
+The composer supports `/` commands, `@` file mentions, and `$` skill mentions.
+Typing `@foo` searches the active thread cwd and inserts a relative `@path`;
+typing `$review` searches installed local skills from the user's Codex/Agents
+and project skill roots, then inserts the literal `$skill-name` token.
+
+Plan-mode replies open a right-side Plan panel automatically. The same panel
+opens with `Ctrl/Cmd+Shift+L`, `/plans`, or the composer `plan` toggle. It
+shows the latest plan-mode markdown, can copy/download it, save it into the
+active thread workspace, and send an implementation prompt back to the thread.
+
+Each thread can open a real PTY terminal drawer with `Ctrl/Cmd+J`. The terminal
+uses the same cwd/worktree as the active thread, streams through Electron IPC,
+and is rendered with xterm rather than a fake command-output panel. When the
+terminal has focus, `Ctrl/Cmd+D` splits, `Ctrl/Cmd+N` opens another pane,
+and `Ctrl/Cmd+W` closes the active pane without toggling diff or archiving chat
+threads. The terminal toolbar can attach the active selection, or the last
+visible output when nothing is selected, into the composer as a terminal-context
+chip that is sent with the next prompt.
 
 ## Requirements
 
@@ -16,6 +87,14 @@ their CLI bridges land.
 - The [`claude`](https://docs.claude.com/en/docs/claude-code/setup) CLI,
   logged in. debase reuses your existing `claude` login through the
   Claude Agent SDK; it does not ask for an API key.
+- The `codex` CLI, logged in, if you want to run OpenAI Codex threads.
+- The `opencode` CLI, logged in with `opencode auth login`, if you want to run
+  OpenCode threads. On Windows, npm-installed `opencode.cmd` also needs
+  `node.exe`; debase resolves the common npm and Node install folders before
+  starting `opencode serve`.
+- The Cursor CLI `agent` command, logged in, if you want to run Cursor threads.
+  debase intentionally does not use `cursor.cmd agent` as a substitute; the
+  official `agent` command must exist on PATH or in Cursor's install folders.
 - Windows 10+, macOS 12+, or Linux (X11 / Wayland). Tested primarily on
   Windows 11.
 
@@ -72,16 +151,17 @@ prompting.
   loaded via dynamic `await import(...)` in `src/main/agent/claude.ts`. Do
   not switch back to a static import — it would compile to `require()` and
   fail with `ERR_REQUIRE_ESM`.
-- **Linux window controls.** On Linux the OS title bar is hidden and there
-  are no in-app min/max/close buttons. Windows and macOS use the native
-  overlay; Linux support is not yet wired.
+- **Window controls.** Windows uses Electron's native titlebar overlay, macOS
+  uses hidden-inset traffic lights, and Linux renders in-app
+  minimize/maximize/close controls because the OS title bar is hidden.
 
 ## Stack
 
 - Electron 33 (downgraded from 42 — bundled Node 20 needed for the SDK)
 - electron-vite 5 (Vite 7)
 - React 19 + TypeScript 5 + Tailwind CSS 4
-- `@anthropic-ai/claude-agent-sdk`
+- `@anthropic-ai/claude-agent-sdk`, Codex CLI, `@opencode-ai/sdk`, Cursor CLI
+- `node-pty` + `@xterm/xterm` for the per-thread terminal drawer
 - Geist Sans + JetBrains Mono
 
 See `CLAUDE.md` for project conventions, the warm-paper visual identity, and
@@ -94,8 +174,12 @@ the full bug log.
   server, no telemetry, and no cloud sync. Wipe state by clearing the app's
   IndexedDB / localStorage in DevTools or by deleting the user-data folder
   Electron creates for the app.
-- The `claude` CLI keeps its own login under your home directory; debase
-  doesn't touch it.
+- Keybindings live in Electron's user-data folder as `keybindings.json`. The
+  preferred shape is the t3code-style array of `{ "key", "command", "when" }`
+  rules; `when` currently supports `terminalFocus`, `terminalOpen`,
+  `modelPickerOpen`, `!`, `&&`, `||`, and parentheses.
+- The `claude`, `codex`, `opencode`, and Cursor `agent` CLIs keep their own
+  logins under your home directory; debase doesn't touch them.
 
 ## Status
 

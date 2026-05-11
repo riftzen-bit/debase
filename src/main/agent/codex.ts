@@ -1,12 +1,14 @@
 import { spawn, type ChildProcessByStdio } from "node:child_process";
 import type { Readable } from "node:stream";
 import type { ChatEvent, RunConfig, RunMode } from "@shared/chat";
+import type { ProviderRuntimeConfig } from "@shared/providers";
 
 export type CodexRunOptions = {
   prompt: string;
   cwd?: string;
   resumeSessionId?: string | null;
   runConfig: RunConfig;
+  runtime?: ProviderRuntimeConfig;
   signal: AbortSignal;
   onEvent: (event: ChatEvent) => void;
 };
@@ -42,11 +44,12 @@ export async function runCodex({
   cwd,
   resumeSessionId,
   runConfig,
+  runtime,
   signal,
   onEvent,
 }: CodexRunOptions): Promise<void> {
   const startedAt = Date.now();
-  const child = spawnCodex(prompt, cwd, resumeSessionId, runConfig);
+  const child = spawnCodex(prompt, cwd, resumeSessionId, runConfig, runtime);
   let stderr = "";
   let sawResult = false;
   const toolIds = new Set<string>();
@@ -130,6 +133,7 @@ function spawnCodex(
   cwd: string | undefined,
   resumeSessionId: string | null | undefined,
   runConfig: RunConfig,
+  runtime: ProviderRuntimeConfig | undefined,
 ): ChildProcessByStdio<null, Readable, Readable> {
   const args = [
     "--model",
@@ -152,14 +156,36 @@ function spawnCodex(
     args.push(prompt);
   }
 
-  const command = process.platform === "win32" ? "cmd.exe" : "codex";
-  const commandArgs = process.platform === "win32" ? ["/d", "/s", "/c", "codex.cmd", ...args] : args;
+  const configured = runtime?.binaryPath?.trim() || "codex";
+  const spawnInput = codexSpawnInput(configured, args);
+  const env = codexEnv(runtime);
 
-  return spawn(command, commandArgs, {
+  return spawn(spawnInput.command, spawnInput.args, {
     cwd: cwd ?? process.cwd(),
+    env,
     stdio: ["ignore", "pipe", "pipe"],
     windowsHide: true,
   });
+}
+
+function codexSpawnInput(command: string, args: string[]): { command: string; args: string[] } {
+  if (process.platform !== "win32") return { command, args };
+  if (/\.(exe)$/i.test(command) && hasPathSeparator(command)) return { command, args };
+  return {
+    command: process.env.ComSpec || "cmd.exe",
+    args: ["/d", "/s", "/c", command, ...args],
+  };
+}
+
+function codexEnv(runtime: ProviderRuntimeConfig | undefined): NodeJS.ProcessEnv {
+  const env = { ...process.env };
+  const home = runtime?.shadowHomePath?.trim() || runtime?.homePath?.trim();
+  if (home) env.CODEX_HOME = home;
+  return env;
+}
+
+function hasPathSeparator(value: string): boolean {
+  return value.includes("/") || value.includes("\\");
 }
 
 function modeArgs(mode: RunMode, fullAccess: boolean): string[] {

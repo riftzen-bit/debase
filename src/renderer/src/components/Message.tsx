@@ -4,8 +4,10 @@ import type { AssistantBlock, AssistantMessage, ChatMessage } from "../state/typ
 import { Markdown } from "./Markdown";
 import { Trace } from "./Trace";
 import { AskUserCard, isAskUserBlock } from "./AskUserCard";
+import { UserInputCard } from "./UserInputCard";
 import { formatCost, formatDuration } from "../lib/format";
-import { CheckIcon, CopyIcon } from "./icons";
+import { CheckIcon, CopyIcon, TerminalIcon } from "./icons";
+import { deriveDisplayedUserMessageState } from "../lib/terminalContext";
 
 type Props = {
   message: ChatMessage;
@@ -16,11 +18,30 @@ type Props = {
 
 export function Message({ message, threadId, cwd, providerFallback }: Props) {
   if (message.role === "user") {
+    const displayed = deriveDisplayedUserMessageState(message.text);
     return (
       <article className="grid grid-cols-[72px_1fr] gap-4 border-b border-rule/60 px-6 py-5">
         <RoleLabel role="You" />
-        <div className="font-sans text-[14.5px] leading-relaxed text-ink whitespace-pre-wrap break-words">
-          {message.text}
+        <div className="space-y-2">
+          {displayed.visibleText.trim().length > 0 && (
+            <div className="font-sans text-[14.5px] leading-relaxed text-ink whitespace-pre-wrap break-words">
+              {displayed.visibleText}
+            </div>
+          )}
+          {displayed.contexts.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {displayed.contexts.map((context) => (
+                <span
+                  key={context.header}
+                  title={context.body}
+                  className="inline-flex max-w-full items-center gap-1.5 rounded-md border border-rule bg-surface/60 px-2 py-1 text-[11px] text-ink-2"
+                >
+                  <TerminalIcon size={11} />
+                  <span className="min-w-0 truncate font-mono">{context.header}</span>
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       </article>
     );
@@ -56,6 +77,9 @@ export function Message({ message, threadId, cwd, providerFallback }: Props) {
           }
           if (seg.kind === "ask") {
             return <AskUserCard key={`a-${i}`} block={seg.block} threadId={threadId} />;
+          }
+          if (seg.kind === "user_input") {
+            return <UserInputCard key={`u-${i}`} block={seg.block} />;
           }
           return (
             <Trace
@@ -104,10 +128,12 @@ export function Message({ message, threadId, cwd, providerFallback }: Props) {
 }
 
 type ToolUseBlock = Extract<AssistantBlock, { kind: "tool_use" }>;
+type UserInputBlock = Extract<AssistantBlock, { kind: "user_input" }>;
 type Segment =
   | { kind: "text"; text: string }
   | { kind: "ask"; block: ToolUseBlock }
-  | { kind: "ops"; ops: Exclude<AssistantBlock, { kind: "text" }>[] };
+  | { kind: "user_input"; block: UserInputBlock }
+  | { kind: "ops"; ops: Exclude<AssistantBlock, { kind: "text" | "user_input" }>[] };
 
 function groupBlocks(blocks: AssistantBlock[]): Segment[] {
   const out: Segment[] = [];
@@ -118,6 +144,10 @@ function groupBlocks(blocks: AssistantBlock[]): Segment[] {
     }
     if (isAskUserBlock(b)) {
       out.push({ kind: "ask", block: b });
+      continue;
+    }
+    if (b.kind === "user_input") {
+      out.push({ kind: "user_input", block: b });
       continue;
     }
     const tail = out[out.length - 1];
@@ -230,6 +260,8 @@ function roleForProvider(provider: ProviderId): string {
       return "Codex";
     case "opencode":
       return "OpenCode";
+    case "cursor":
+      return "Cursor";
     case "claude":
     default:
       return "Claude";

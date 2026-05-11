@@ -1,26 +1,19 @@
-import { useState } from "react";
 import { useStore } from "../state/store";
 import { ClaudeMark, FolderIcon, PlusIcon, SparkleIcon } from "./icons";
 
 type Props = {
   onOpenSettings: () => void;
+  onOpenCloneProject: () => void;
 };
 
-export function Welcome({ onOpenSettings }: Props) {
+export function Welcome({ onOpenSettings, onOpenCloneProject }: Props) {
   const { newProject } = useStore();
-  const [busy, setBusy] = useState(false);
 
   const onAddProject = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const result = await window.api.dialog.chooseDirectory();
-      if (result.ok) {
-        const name = derive(result.path);
-        newProject(name, result.path);
-      }
-    } finally {
-      setBusy(false);
+    const result = await window.api.dialog.chooseDirectory();
+    if (result.ok) {
+      const name = derive(result.path);
+      newProject(name, result.path);
     }
   };
 
@@ -46,7 +39,6 @@ export function Welcome({ onOpenSettings }: Props) {
             <button
               type="button"
               onClick={onAddProject}
-              disabled={busy}
               className="inline-flex items-center gap-2 rounded-md border border-accent/50 bg-accent-soft/40 px-4 py-2 text-[13px] text-accent-deep transition-colors hover:border-accent/70 hover:bg-accent-soft disabled:opacity-60"
             >
               <PlusIcon size={13} />
@@ -58,6 +50,13 @@ export function Welcome({ onOpenSettings }: Props) {
               className="inline-flex items-center gap-2 rounded-md border border-rule bg-canvas px-4 py-2 text-[13px] text-ink-2 transition-colors hover:border-rule-strong hover:text-ink"
             >
               Settings
+            </button>
+            <button
+              type="button"
+              onClick={onOpenCloneProject}
+              className="inline-flex items-center gap-2 rounded-md border border-rule bg-canvas px-4 py-2 text-[13px] text-ink-2 transition-colors hover:border-rule-strong hover:bg-surface hover:text-ink disabled:opacity-60"
+            >
+              Clone Git URL
             </button>
           </div>
         </div>

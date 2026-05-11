@@ -1,29 +1,71 @@
 export type ShortcutScope = "global" | "chat" | "composer";
+export type KeybindingCommand =
+  | "settings.toggle"
+  | "shortcuts.open"
+  | "commandPalette.toggle"
+  | "chat.new"
+  | "chat.stop"
+  | "chat.archive"
+  | "editor.openFavorite"
+  | "sidebar.toggle"
+  | "thread.previous"
+  | "thread.next"
+  | "lock.toggle"
+  | "diff.toggle"
+  | "terminal.toggle"
+  | "terminal.new"
+  | "terminal.split"
+  | "terminal.close"
+  | "tasks.toggle"
+  | "plan.toggle"
+  | "modelPicker.toggle";
 
 export type ShortcutBinding = {
   id: string;
+  command: KeybindingCommand;
   keys: string;
+  when?: string;
   description: string;
   scope: ShortcutScope;
 };
 
+export type KeybindingRule = {
+  key: string;
+  command: KeybindingCommand;
+  when?: string;
+};
+
+export type KeybindingContext = {
+  terminalFocus?: boolean;
+  terminalOpen?: boolean;
+  modelPickerOpen?: boolean;
+};
+
 export const SHORTCUTS: ShortcutBinding[] = [
-  { id: "settings", keys: "mod+,", description: "Toggle settings", scope: "global" },
-  { id: "shortcuts", keys: "mod+/", description: "Show keyboard shortcuts", scope: "global" },
-  { id: "palette", keys: "mod+k", description: "Command palette", scope: "global" },
-  { id: "newThread", keys: "mod+shift+n", description: "New thread in current project", scope: "global" },
-  { id: "sidebar", keys: "mod+b", description: "Toggle sidebar", scope: "global" },
-  { id: "stop", keys: "mod+.", description: "Stop running stream", scope: "chat" },
-  { id: "archiveThread", keys: "mod+w", description: "Archive current thread", scope: "chat" },
-  { id: "prevThread", keys: "alt+arrowup", description: "Previous thread in project", scope: "chat" },
-  { id: "nextThread", keys: "alt+arrowdown", description: "Next thread in project", scope: "chat" },
-  { id: "lock", keys: "mod+l", description: "Toggle follow latest output", scope: "chat" },
-  { id: "tasks", keys: "mod+j", description: "Toggle tasks panel", scope: "chat" },
-  { id: "send", keys: "enter", description: "Send (or queue while busy)", scope: "composer" },
-  { id: "newline", keys: "shift+enter", description: "Insert newline", scope: "composer" },
-  { id: "sendNow", keys: "mod+enter", description: "Interrupt and send now", scope: "composer" },
-  { id: "clearDraft", keys: "escape", description: "Clear draft (or queued prompt)", scope: "composer" },
-  { id: "recall", keys: "arrowup", description: "Recall last prompt when empty", scope: "composer" },
+  { id: "settings", command: "settings.toggle", keys: "mod+,", description: "Toggle settings", scope: "global" },
+  { id: "shortcuts", command: "shortcuts.open", keys: "mod+/", description: "Show keyboard shortcuts", scope: "global" },
+  { id: "palette", command: "commandPalette.toggle", keys: "mod+k", when: "!terminalFocus", description: "Command palette", scope: "global" },
+  { id: "newThread", command: "chat.new", keys: "mod+n", when: "!terminalFocus", description: "New thread in current project", scope: "global" },
+  { id: "openEditor", command: "editor.openFavorite", keys: "mod+o", when: "!terminalFocus", description: "Open current project in editor", scope: "global" },
+  { id: "sidebar", command: "sidebar.toggle", keys: "mod+b", description: "Toggle sidebar", scope: "global" },
+  { id: "stop", command: "chat.stop", keys: "mod+.", description: "Stop running stream", scope: "chat" },
+  { id: "archiveThread", command: "chat.archive", keys: "mod+w", when: "!terminalFocus", description: "Archive current thread", scope: "chat" },
+  { id: "prevThread", command: "thread.previous", keys: "alt+arrowup", description: "Previous thread in project", scope: "chat" },
+  { id: "nextThread", command: "thread.next", keys: "alt+arrowdown", description: "Next thread in project", scope: "chat" },
+  { id: "lock", command: "lock.toggle", keys: "mod+l", description: "Toggle follow latest output", scope: "chat" },
+  { id: "diff", command: "diff.toggle", keys: "mod+d", when: "!terminalFocus", description: "Toggle git diff panel", scope: "chat" },
+  { id: "terminal", command: "terminal.toggle", keys: "mod+j", description: "Toggle terminal", scope: "chat" },
+  { id: "terminalNew", command: "terminal.new", keys: "mod+n", when: "terminalFocus", description: "New terminal when terminal is focused", scope: "chat" },
+  { id: "terminalSplit", command: "terminal.split", keys: "mod+d", when: "terminalFocus", description: "Split terminal when terminal is focused", scope: "chat" },
+  { id: "terminalClose", command: "terminal.close", keys: "mod+w", when: "terminalFocus", description: "Close terminal when terminal is focused", scope: "chat" },
+  { id: "tasks", command: "tasks.toggle", keys: "mod+shift+j", description: "Toggle tasks panel", scope: "chat" },
+  { id: "planSidebar", command: "plan.toggle", keys: "mod+shift+l", description: "Toggle plan panel", scope: "chat" },
+  { id: "modelPicker", command: "modelPicker.toggle", keys: "mod+shift+m", when: "!terminalFocus", description: "Toggle model picker", scope: "chat" },
+  { id: "send", command: "commandPalette.toggle", keys: "enter", description: "Send (or queue while busy)", scope: "composer" },
+  { id: "newline", command: "commandPalette.toggle", keys: "shift+enter", description: "Insert newline", scope: "composer" },
+  { id: "sendNow", command: "commandPalette.toggle", keys: "mod+enter", description: "Interrupt and send now", scope: "composer" },
+  { id: "clearDraft", command: "commandPalette.toggle", keys: "escape", description: "Clear draft (or queued prompt)", scope: "composer" },
+  { id: "recall", command: "commandPalette.toggle", keys: "arrowup", description: "Recall last prompt when empty", scope: "composer" },
 ];
 
 /**
@@ -38,6 +80,14 @@ export const NON_CONFIGURABLE_IDS = new Set<string>([
   "clearDraft",
   "recall",
 ]);
+
+export const DEFAULT_KEYBINDING_RULES: KeybindingRule[] = SHORTCUTS
+  .filter((shortcut) => !NON_CONFIGURABLE_IDS.has(shortcut.id))
+  .map((shortcut) => ({
+    key: shortcut.keys,
+    command: shortcut.command,
+    ...(shortcut.when ? { when: shortcut.when } : {}),
+  }));
 
 const isMac =
   typeof navigator !== "undefined" &&
@@ -139,6 +189,152 @@ export function matchesKey(
   if (parsed.shift !== e.shiftKey) return false;
   const eKey = e.key.toLowerCase();
   return parsed.key === eKey;
+}
+
+export function keybindingCommandForEvent(
+  e: KeyboardEvent | React.KeyboardEvent,
+  rules: readonly KeybindingRule[],
+  context: KeybindingContext,
+): KeybindingCommand | null {
+  let matched: KeybindingCommand | null = null;
+  for (const rule of rules) {
+    if (!matchesKey(e, rule.key)) continue;
+    if (rule.when && !evaluateWhen(rule.when, context)) continue;
+    matched = rule.command;
+  }
+  return matched;
+}
+
+export function matchesCommand(
+  e: KeyboardEvent | React.KeyboardEvent,
+  command: KeybindingCommand,
+  rules: readonly KeybindingRule[],
+  context: KeybindingContext = {},
+): boolean {
+  return keybindingCommandForEvent(e, rules, context) === command;
+}
+
+export function ruleForShortcutId(id: string, key: string): KeybindingRule | null {
+  const shortcut = SHORTCUTS.find((item) => item.id === id);
+  if (!shortcut || NON_CONFIGURABLE_IDS.has(shortcut.id)) return null;
+  return {
+    key,
+    command: shortcut.command,
+    ...(shortcut.when ? { when: shortcut.when } : {}),
+  };
+}
+
+export function isKeybindingCommand(value: unknown): value is KeybindingCommand {
+  return (
+    typeof value === "string" &&
+    SHORTCUTS.some((shortcut) => shortcut.command === value)
+  );
+}
+
+export function sanitizeKeybindingRules(raw: unknown): KeybindingRule[] {
+  if (!Array.isArray(raw)) return [];
+  const rules: KeybindingRule[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const rule = item as { key?: unknown; command?: unknown; when?: unknown };
+    if (typeof rule.key !== "string" || rule.key.trim().length === 0) continue;
+    if (!isKeybindingCommand(rule.command)) continue;
+    const when = typeof rule.when === "string" && rule.when.trim().length > 0
+      ? rule.when.trim()
+      : undefined;
+    rules.push({
+      key: rule.key.trim(),
+      command: rule.command,
+      ...(when ? { when } : {}),
+    });
+  }
+  return rules;
+}
+
+function evaluateWhen(expression: string, context: KeybindingContext): boolean {
+  const tokens = tokenizeWhen(expression);
+  if (!tokens || tokens.length === 0) return false;
+  let index = 0;
+
+  const parsePrimary = (): boolean | null => {
+    const token = tokens[index];
+    if (!token) return null;
+    if (token === "(") {
+      index += 1;
+      const value = parseOr();
+      if (tokens[index] !== ")") return null;
+      index += 1;
+      return value;
+    }
+    if (/^[A-Za-z_][A-Za-z0-9_.-]*$/.test(token)) {
+      index += 1;
+      return Boolean(context[token as keyof KeybindingContext]);
+    }
+    return null;
+  };
+
+  const parseUnary = (): boolean | null => {
+    if (tokens[index] === "!") {
+      index += 1;
+      const value = parseUnary();
+      return value == null ? null : !value;
+    }
+    return parsePrimary();
+  };
+
+  const parseAnd = (): boolean | null => {
+    let left = parseUnary();
+    if (left == null) return null;
+    while (tokens[index] === "&&") {
+      index += 1;
+      const right = parseUnary();
+      if (right == null) return null;
+      left = left && right;
+    }
+    return left;
+  };
+
+  const parseOr = (): boolean | null => {
+    let left = parseAnd();
+    if (left == null) return null;
+    while (tokens[index] === "||") {
+      index += 1;
+      const right = parseAnd();
+      if (right == null) return null;
+      left = left || right;
+    }
+    return left;
+  };
+
+  const result = parseOr();
+  return result === true && index === tokens.length;
+}
+
+function tokenizeWhen(expression: string): string[] | null {
+  const tokens: string[] = [];
+  let i = 0;
+  while (i < expression.length) {
+    const ch = expression[i]!;
+    if (/\s/.test(ch)) {
+      i += 1;
+      continue;
+    }
+    if (expression.startsWith("&&", i) || expression.startsWith("||", i)) {
+      tokens.push(expression.slice(i, i + 2));
+      i += 2;
+      continue;
+    }
+    if (ch === "!" || ch === "(" || ch === ")") {
+      tokens.push(ch);
+      i += 1;
+      continue;
+    }
+    const match = /^[A-Za-z_][A-Za-z0-9_.-]*/.exec(expression.slice(i));
+    if (!match) return null;
+    tokens.push(match[0]);
+    i += match[0].length;
+  }
+  return tokens;
 }
 
 /**

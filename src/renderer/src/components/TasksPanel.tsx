@@ -14,15 +14,6 @@ type Props = {
   onClose: () => void;
 };
 
-/**
- * "Tasks" — surfaces the agent's most recent TodoWrite call as an editorial
- * timeline. The reference (t3 code) uses dark cards with strike-through
- * completed steps; we go quieter: a hairline left-rule joins the rows, the
- * in-progress task uses the project's `dot-cycle` for live colour, and a
- * thin progress bar at the top tracks completion ratio. Empty state ships
- * a draft that explains how the panel populates so a fresh thread doesn't
- * just look like an empty drawer.
- */
 export function TasksPanel({ thread, onClose }: Props) {
   const todos = thread ? extractLatestTodos(thread) : null;
   const counts = countTodos(todos);
@@ -144,12 +135,7 @@ function EmptyState() {
   return (
     <div className="flex h-full flex-col items-start gap-3 pt-6 text-[12.5px] leading-relaxed text-ink-3">
       <p className="font-mono italic text-ink-3">no tasks yet</p>
-      <p className="max-w-xs">
-        When the agent tracks a multi-step plan with the{" "}
-        <span className="font-mono text-ink-2">TodoWrite</span> tool, its checklist appears
-        here — completed steps strike through, the active step pulses, and pending steps
-        sit quietly until they're picked up.
-      </p>
+      <p className="max-w-xs">This thread has not recorded a checklist.</p>
     </div>
   );
 }
@@ -161,7 +147,7 @@ function extractLatestTodos(thread: Thread): Todo[] | null {
     for (let j = m.blocks.length - 1; j >= 0; j--) {
       const b: AssistantBlock = m.blocks[j]!;
       if (b.kind !== "tool_use") continue;
-      if (b.name !== "TodoWrite") continue;
+      if (!isTodoToolName(b.name)) continue;
       const todos = parseTodos(b.input);
       if (todos) return todos;
     }
@@ -176,18 +162,44 @@ function parseTodos(input: unknown): Todo[] | null {
   const out: Todo[] = [];
   for (const item of list) {
     if (!item || typeof item !== "object") continue;
-    const t = item as { content?: unknown; status?: unknown; activeForm?: unknown };
-    const content = typeof t.content === "string" ? t.content : "";
-    const status = isStatus(t.status) ? t.status : "pending";
-    const activeForm = typeof t.activeForm === "string" ? t.activeForm : content;
-    if (!content) continue;
+    const t = item as {
+      content?: unknown;
+      title?: unknown;
+      status?: unknown;
+      activeForm?: unknown;
+    };
+    const rawContent =
+      typeof t.content === "string"
+        ? t.content
+        : typeof t.title === "string"
+          ? t.title
+          : "";
+    const content = rawContent.trim() || `Task ${out.length + 1}`;
+    const status = normalizeStatus(t.status);
+    const activeForm =
+      typeof t.activeForm === "string" && t.activeForm.trim().length > 0
+        ? t.activeForm.trim()
+        : content;
     out.push({ content, status, activeForm });
   }
   return out;
 }
 
-function isStatus(v: unknown): v is TodoStatus {
-  return v === "pending" || v === "in_progress" || v === "completed";
+function normalizeStatus(v: unknown): TodoStatus {
+  if (v === "completed") return "completed";
+  if (v === "in_progress" || v === "inProgress") return "in_progress";
+  return "pending";
+}
+
+function isTodoToolName(name: string): boolean {
+  const normalized = name.toLowerCase().replace(/[\s-]+/g, "_");
+  return (
+    normalized.includes("todowrite") ||
+    normalized === "todo_write" ||
+    normalized.endsWith("/update_todos") ||
+    normalized.endsWith("_update_todos") ||
+    normalized === "update_todos"
+  );
 }
 
 function countTodos(todos: Todo[] | null): {

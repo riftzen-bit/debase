@@ -1,5 +1,4 @@
 import {
-  useEffect,
   useMemo,
   useRef,
   useState,
@@ -7,8 +6,6 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useStore } from "../state/store";
-import { useShortcutOverrides } from "../state/keybindings";
-import { effectiveKey, matchesKey } from "../lib/shortcuts";
 import { relativeTime, truncate } from "../lib/format";
 import type { Project, Thread } from "../state/types";
 import { ContextMenu, type ContextMenuEntry } from "./ContextMenu";
@@ -65,23 +62,6 @@ export function Sidebar({ onOpenSettings, settingsActive }: Props) {
   const [edit, setEdit] = useState<EditState>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
-  // Keyboard shortcut: new thread in the current (or first) project. Capture
-  // phase beats textarea handlers. Honours `userData/keybindings.json`
-  // overrides via `effectiveKey`.
-  const overrides = useShortcutOverrides();
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (matchesKey(e, effectiveKey("newThread", "mod+shift+n", overrides))) {
-        e.preventDefault();
-        e.stopPropagation();
-        const id = state.selectedProjectId ?? state.projects[0]?.id ?? null;
-        if (id) newThread(id);
-      }
-    };
-    window.addEventListener("keydown", onKey, true);
-    return () => window.removeEventListener("keydown", onKey, true);
-  }, [newThread, state.projects, state.selectedProjectId, overrides]);
-
   const visibleProjects = useMemo(
     () => filterAndSort(state.projects, search, sort),
     [state.projects, search, sort],
@@ -113,12 +93,7 @@ export function Sidebar({ onOpenSettings, settingsActive }: Props) {
           Projects
         </h2>
         <div className="flex items-center gap-0.5">
-          <IconButton
-            label="Toggle sort order"
-            onClick={() => setSort((s) => (s === "recent" ? "alpha" : "recent"))}
-          >
-            <SortIcon size={13} />
-          </IconButton>
+          <SortMenu value={sort} onChange={setSort} />
           <ProjectAdd />
         </div>
       </div>
@@ -572,6 +547,33 @@ function ArchiveSection({
         </ul>
       )}
     </div>
+  );
+}
+
+function SortMenu({
+  value,
+  onChange,
+}: {
+  value: SortMode;
+  onChange: (value: SortMode) => void;
+}) {
+  const label = value === "recent" ? "Recent" : "Alphabetical";
+  const next = value === "recent" ? "alpha" : "recent";
+  const nextLabel = next === "recent" ? "Recent" : "Alphabetical";
+  return (
+    <button
+      type="button"
+      title={`Sort: ${label}. Click for ${nextLabel}.`}
+      aria-label={`Sort projects and threads by ${label}; click to switch to ${nextLabel}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onChange(next);
+      }}
+      className="flex h-6 items-center gap-1.5 rounded-sm px-1.5 text-[11px] text-ink-3 transition-colors hover:bg-surface-2 hover:text-ink-2"
+    >
+      <SortIcon size={13} />
+      <span className="max-w-20 truncate">{label}</span>
+    </button>
   );
 }
 

@@ -10,12 +10,21 @@ import {
   type ReactNode,
 } from "react";
 import type { ChatEventEnvelope, RunConfig } from "@shared/chat";
-import type { ProviderId } from "@shared/providers";
+import {
+  EMPTY_PROVIDER_CATALOG,
+  modelPreferencesForProvider,
+  type ProviderCatalog,
+  type ProviderModelPreferences,
+  type ProviderId,
+  type ProviderRuntimeConfig,
+} from "@shared/providers";
 import { newId } from "../lib/id";
 import { load, save } from "../lib/persist";
 import { truncate } from "../lib/format";
+import { threadCwd } from "../lib/workdir";
 import {
   DEFAULT_SETTINGS,
+  type AssistantBlock,
   type AppState,
   type AssistantMessage,
   type ChatMessage,
@@ -38,10 +47,21 @@ type Action =
   | { type: "rename_thread"; threadId: string; title: string }
   | { type: "set_thread_pinned"; threadId: string; pinned: boolean }
   | { type: "set_thread_archived"; threadId: string; archived: boolean }
+  | { type: "set_thread_worktree"; threadId: string; worktreePath: string | null }
   | { type: "update_thread_run_config"; threadId: string; runConfig: Partial<RunConfig> }
   | { type: "update_settings_defaults"; defaults: Partial<RunConfig> }
   | { type: "update_settings_provider"; provider: ProviderId; enabled: boolean }
+  | {
+      type: "update_model_preferences";
+      provider: ProviderId;
+      preferences: Partial<ProviderModelPreferences>;
+    }
   | { type: "set_editor_command"; command: string }
+  | {
+      type: "update_provider_runtime";
+      provider: ProviderId;
+      config: Partial<ProviderRuntimeConfig>;
+    }
   | { type: "append_user"; threadId: string; message: ChatMessage }
   | {
       type: "begin_stream";
@@ -204,6 +224,17 @@ function reducer(state: AppState, action: Action): AppState {
         })),
       };
 
+    case "set_thread_worktree":
+      return {
+        ...state,
+        projects: mapThread(state.projects, action.threadId, (t) => ({
+          ...t,
+          sessionId: null,
+          worktreePath: action.worktreePath,
+          updatedAt: Date.now(),
+        })),
+      };
+
     case "update_thread_run_config":
       // Mirror the user's choice onto `settings.defaults` so the next thread
       // they create inherits the same model/mode/effort/thinking they were
@@ -247,11 +278,42 @@ function reducer(state: AppState, action: Action): AppState {
         },
       };
 
+    case "update_model_preferences": {
+      const current = modelPreferencesForProvider(
+        state.settings.modelPreferences,
+        action.provider,
+      );
+      return {
+        ...state,
+        settings: {
+          ...state.settings,
+          modelPreferences: {
+            ...state.settings.modelPreferences,
+            [action.provider]: { ...current, ...action.preferences },
+          },
+        },
+      };
+    }
+
     case "set_editor_command":
       return {
         ...state,
         settings: { ...state.settings, editorCommand: action.command },
       };
+
+    case "update_provider_runtime": {
+      const current = state.settings.providerRuntime[action.provider] ?? {};
+      return {
+        ...state,
+        settings: {
+          ...state.settings,
+          providerRuntime: {
+            ...state.settings.providerRuntime,
+            [action.provider]: { ...current, ...action.config },
+          },
+        },
+      };
+    }
 
     case "append_user":
       return {
@@ -466,12 +528,12 @@ function mutateAssistant(
     case "assistant_text":
       return {
         ...msg,
-        blocks: [...msg.blocks, { kind: "text", text: event.text }],
+        blocks: appendAssistantBlock(msg.blocks, { kind: "text", text: event.text }),
       };
     case "thinking":
       return {
         ...msg,
-        blocks: [...msg.blocks, { kind: "thinking", text: event.text }],
+        blocks: appendAssistantBlock(msg.blocks, { kind: "thinking", text: event.text }),
       };
     case "tool_use":
       return {
@@ -495,6 +557,27 @@ function mutateAssistant(
             : b,
         ),
       };
+    case "user_input_request":
+      return {
+        ...msg,
+        blocks: [
+          ...msg.blocks,
+          {
+            kind: "user_input",
+            requestId: event.requestId,
+            questions: event.questions,
+          },
+        ],
+      };
+    case "user_input_resolved":
+      return {
+        ...msg,
+        blocks: msg.blocks.map((b) =>
+          b.kind === "user_input" && b.requestId === event.requestId
+            ? { ...b, answers: event.answers, rejected: event.rejected }
+            : b,
+        ),
+      };
     case "result":
       return {
         ...msg,
@@ -515,8 +598,31 @@ function mutateAssistant(
   }
 }
 
+function appendAssistantBlock(
+  blocks: AssistantMessage["blocks"],
+  block: Extract<AssistantBlock, { kind: "text" | "thinking" }>,
+): AssistantMessage["blocks"] {
+  if (block.text.length === 0) return blocks;
+  const previous = blocks[blocks.length - 1];
+  if (isAppendableTextBlock(previous) && previous.kind === block.kind) {
+    return [
+      ...blocks.slice(0, -1),
+      { ...previous, text: previous.text + block.text },
+    ];
+  }
+  return [...blocks, block];
+}
+
+function isAppendableTextBlock(
+  block: AssistantBlock | undefined,
+): block is Extract<AssistantBlock, { kind: "text" | "thinking" }> {
+  return block?.kind === "text" || block?.kind === "thinking";
+}
+
 type StoreContext = {
   state: AppState;
+  providerCatalog: ProviderCatalog;
+  refreshProviderCatalog: () => Promise<void>;
   newProject: (name: string, path: string) => void;
   renameProject: (projectId: string, name: string) => void;
   deleteProject: (projectId: string) => void;
@@ -528,12 +634,26 @@ type StoreContext = {
   renameThread: (threadId: string, title: string) => void;
   setThreadPinned: (threadId: string, pinned: boolean) => void;
   setThreadArchived: (threadId: string, archived: boolean) => void;
+  setThreadWorktree: (threadId: string, worktreePath: string | null) => void;
   updateThreadRunConfig: (threadId: string, runConfig: Partial<RunConfig>) => void;
   updateDefaultRunConfig: (defaults: Partial<RunConfig>) => void;
   setProviderEnabled: (provider: ProviderId, enabled: boolean) => void;
+  updateModelPreferences: (
+    provider: ProviderId,
+    preferences: Partial<ProviderModelPreferences>,
+  ) => void;
   setEditorCommand: (command: string) => void;
+  updateProviderRuntime: (
+    provider: ProviderId,
+    config: Partial<ProviderRuntimeConfig>,
+  ) => void;
   setAskBeforeTools: (enabled: boolean) => void;
   respondToPermission: (permId: string, decision: "allow" | "deny") => Promise<void>;
+  respondToUserInput: (
+    requestId: string,
+    answers: Record<string, string[]>,
+    reject?: boolean,
+  ) => Promise<void>;
   /**
    * Send a prompt on the given thread (defaults to selectedThreadId). Returns
    * a status string so the caller knows whether to drop the draft or restore
@@ -563,6 +683,9 @@ const Ctx = createContext<StoreContext | null>(null);
 
 export function StoreProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [providerCatalog, setProviderCatalog] = useState<ProviderCatalog>(
+    EMPTY_PROVIDER_CATALOG,
+  );
   const stateRef = useRef(state);
   stateRef.current = state;
   // Without this guard, the very first render would write the empty
@@ -583,10 +706,25 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     // only honoured once per launch, so a later renderer compromise can't
     // smuggle additional roots in without going through chooseDirectory.
     const rootPaths = (persisted?.projects ?? [])
-      .map((p) => p.path)
+      .flatMap((p) => [
+        p.path,
+        ...p.threads.map((t) => t.worktreePath ?? ""),
+      ])
       .filter((p): p is string => typeof p === "string" && p.length > 0);
     void window.api.project.bootstrapAllowlist(rootPaths);
   }, []);
+
+  const refreshProviderCatalog = useCallback(async () => {
+    const response = await window.api.providers.list({
+      runtime: stateRef.current.settings.providerRuntime,
+    });
+    setProviderCatalog(response.catalog);
+  }, []);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    void refreshProviderCatalog();
+  }, [hydrated, refreshProviderCatalog]);
 
   useEffect(() => {
     if (!hydrated) return;
@@ -699,6 +837,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       createdAt: now,
       updatedAt: now,
       sessionId: null,
+      worktreePath: null,
       runConfig: { ...stateRef.current.settings.defaults },
       messages: [],
     };
@@ -737,6 +876,10 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "set_thread_archived", threadId: id, archived });
   }, []);
 
+  const setThreadWorktree = useCallback((id: string, worktreePath: string | null) => {
+    dispatch({ type: "set_thread_worktree", threadId: id, worktreePath });
+  }, []);
+
   const updateThreadRunConfig = useCallback(
     (id: string, runConfig: Partial<RunConfig>) => {
       dispatch({ type: "update_thread_run_config", threadId: id, runConfig });
@@ -752,9 +895,23 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     dispatch({ type: "update_settings_provider", provider, enabled });
   }, []);
 
+  const updateModelPreferences = useCallback(
+    (provider: ProviderId, preferences: Partial<ProviderModelPreferences>) => {
+      dispatch({ type: "update_model_preferences", provider, preferences });
+    },
+    [],
+  );
+
   const setEditorCommand = useCallback((command: string) => {
     dispatch({ type: "set_editor_command", command });
   }, []);
+
+  const updateProviderRuntime = useCallback(
+    (provider: ProviderId, config: Partial<ProviderRuntimeConfig>) => {
+      dispatch({ type: "update_provider_runtime", provider, config });
+    },
+    [],
+  );
 
   const setAskBeforeTools = useCallback((enabled: boolean) => {
     dispatch({ type: "set_ask_before_tools", enabled });
@@ -772,6 +929,17 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       window.setTimeout(() => {
         dispatch({ type: "permission_remove", permId });
       }, 600);
+    },
+    [],
+  );
+
+  const respondToUserInput = useCallback(
+    async (
+      requestId: string,
+      answers: Record<string, string[]>,
+      reject?: boolean,
+    ) => {
+      await window.api.chat.respondToUserInput({ requestId, answers, reject });
     },
     [],
   );
@@ -825,10 +993,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           threadId,
           provider: thread.runConfig.provider,
           prompt: text,
-          cwd: project.path || undefined,
+          cwd: threadCwd(project, thread) || undefined,
           resumeSessionId: thread.sessionId,
           runConfig: thread.runConfig,
-          askBeforeTools: stateRef.current.settings.askBeforeTools === true,
+          providerRuntime: stateRef.current.settings.providerRuntime,
+          askBeforeTools:
+            stateRef.current.settings.askBeforeTools === true && !thread.runConfig.fullAccess,
         });
         if (!resp.ok) {
           dispatch({
@@ -932,6 +1102,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const value = useMemo<StoreContext>(
     () => ({
       state,
+      providerCatalog,
+      refreshProviderCatalog,
       newProject,
       renameProject,
       deleteProject,
@@ -943,12 +1115,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       renameThread,
       setThreadPinned,
       setThreadArchived,
+      setThreadWorktree,
       updateThreadRunConfig,
       updateDefaultRunConfig,
       setProviderEnabled,
+      updateModelPreferences,
       setEditorCommand,
+      updateProviderRuntime,
       setAskBeforeTools,
       respondToPermission,
+      respondToUserInput,
       sendPrompt,
       sendNow,
       enqueuePrompt,
@@ -958,6 +1134,8 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     }),
     [
       state,
+      providerCatalog,
+      refreshProviderCatalog,
       newProject,
       renameProject,
       deleteProject,
@@ -969,12 +1147,16 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       renameThread,
       setThreadPinned,
       setThreadArchived,
+      setThreadWorktree,
       updateThreadRunConfig,
       updateDefaultRunConfig,
       setProviderEnabled,
+      updateModelPreferences,
       setEditorCommand,
+      updateProviderRuntime,
       setAskBeforeTools,
       respondToPermission,
+      respondToUserInput,
       sendPrompt,
       sendNow,
       enqueuePrompt,

@@ -1,9 +1,21 @@
-import type { ProviderId } from "@shared/providers";
-import type { RunConfig, RunMode } from "@shared/chat";
+import {
+  DEFAULT_PROVIDER_RUNTIME_SETTINGS,
+  type ModelPreferencesByProvider,
+  type ProviderId,
+  type ProviderRuntimeSettings,
+} from "@shared/providers";
+import type { RunConfig, RunMode, UserInputQuestion } from "@shared/chat";
 
 export type AssistantBlock =
   | { kind: "text"; text: string }
   | { kind: "thinking"; text: string }
+  | {
+      kind: "user_input";
+      requestId: string;
+      questions: UserInputQuestion[];
+      answers?: Record<string, string[]>;
+      rejected?: boolean;
+    }
   | {
       kind: "tool_use";
       id: string;
@@ -47,6 +59,12 @@ export type Thread = {
   createdAt: number;
   updatedAt: number;
   sessionId: string | null;
+  /**
+   * Optional per-thread Git worktree. When present, agent runs, markdown file
+   * links, changed-file summaries, scripts, and git status use this path
+   * instead of the parent project path.
+   */
+  worktreePath?: string | null;
   messages: ChatMessage[];
   runConfig: RunConfig;
   /**
@@ -82,6 +100,13 @@ export type Project = {
 export type AppSettings = {
   defaults: RunConfig;
   enabledProviders: Record<ProviderId, boolean>;
+  /**
+   * Per-provider model picker preferences. Runtime-discovered providers can
+   * favorite/hide local models, but custom slugs are ignored for providers
+   * that must stay sourced from the user's CLI login.
+   */
+  modelPreferences: ModelPreferencesByProvider;
+  providerRuntime: ProviderRuntimeSettings;
   /**
    * Argv-style editor command used by the "open in editor" action. Tokens are
    * split by whitespace (with quote-awareness) and the project path is
@@ -145,7 +170,9 @@ export const DEFAULT_RUN_CONFIG: RunConfig = {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   defaults: DEFAULT_RUN_CONFIG,
-  enabledProviders: { claude: true, codex: true, opencode: false },
+  enabledProviders: { claude: true, codex: true, opencode: true, cursor: true },
+  modelPreferences: {},
+  providerRuntime: DEFAULT_PROVIDER_RUNTIME_SETTINGS,
   editorCommand: "",
   askBeforeTools: false,
 };

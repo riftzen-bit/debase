@@ -10,12 +10,14 @@ import type {
 } from "@anthropic-ai/claude-agent-sdk";
 import type { ChatEvent, RunConfig, RunMode } from "@shared/chat";
 import { modelSupports1MBeta } from "@shared/providers";
+import type { ProviderRuntimeConfig } from "@shared/providers";
 
 export type ClaudeRunOptions = {
   prompt: string;
   cwd?: string;
   resumeSessionId?: string | null;
   runConfig: RunConfig;
+  runtime?: ProviderRuntimeConfig;
   signal: AbortSignal;
   onEvent: (event: ChatEvent) => void;
   /**
@@ -46,6 +48,7 @@ export async function runClaude({
   cwd,
   resumeSessionId,
   runConfig,
+  runtime,
   signal,
   onEvent,
   requestPermission,
@@ -65,6 +68,17 @@ export async function runClaude({
     // asks in prose and the user replies in the composer like any turn.
     disallowedTools: ["AskUserQuestion"],
   };
+
+  const binaryPath = runtime?.binaryPath?.trim();
+  if (binaryPath && binaryPath !== "claude") {
+    options.pathToClaudeCodeExecutable = binaryPath;
+  }
+
+  const env = claudeEnv(runtime);
+  if (env) options.env = env;
+
+  const extraArgs = parseClaudeLaunchArgs(runtime?.launchArgs);
+  if (extraArgs) options.extraArgs = extraArgs;
 
   if (runConfig.fallbackModel) {
     options.fallbackModel = runConfig.fallbackModel;
@@ -112,6 +126,41 @@ export async function runClaude({
     const msg = err instanceof Error ? err.message : String(err);
     onEvent({ kind: "error", message: msg });
   }
+}
+
+function claudeEnv(runtime: ProviderRuntimeConfig | undefined): Record<string, string | undefined> | null {
+  const home = runtime?.homePath?.trim();
+  if (!home) return null;
+  return { ...process.env, HOME: home, USERPROFILE: home };
+}
+
+function parseClaudeLaunchArgs(value: string | undefined): Record<string, string | null> | null {
+  const tokens = splitArgv(value ?? "");
+  if (tokens.length === 0) return null;
+  const out: Record<string, string | null> = {};
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (!token.startsWith("--")) continue;
+    const name = token.slice(2);
+    if (!name) continue;
+    const next = tokens[index + 1];
+    if (next && !next.startsWith("--")) {
+      out[name] = next;
+      index += 1;
+    } else {
+      out[name] = null;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+function splitArgv(value: string): string[] {
+  const tokens: string[] = [];
+  const pattern = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|[^\s]+/g;
+  for (const match of value.matchAll(pattern)) {
+    tokens.push((match[1] ?? match[2] ?? match[0]).replace(/\\"/g, '"').replace(/\\'/g, "'"));
+  }
+  return tokens;
 }
 
 function mapMode(mode: RunMode): PermissionMode {

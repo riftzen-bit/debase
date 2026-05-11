@@ -10,6 +10,7 @@ const TONE: Record<ProviderId, string> = {
   claude: "text-accent",
   codex: "text-ink-2",
   opencode: "text-ink-2",
+  cursor: "text-ink-2",
 };
 
 export function ProviderBadge({ provider, size = "sm" }: Props) {

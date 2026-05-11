@@ -1,13 +1,13 @@
 import type { EffortLevel } from "./chat";
 
-export const PROVIDERS = ["claude", "codex", "opencode"] as const;
+export const PROVIDERS = ["claude", "codex", "opencode", "cursor"] as const;
 export type ProviderId = (typeof PROVIDERS)[number];
 
 export type ProviderMeta = {
   id: ProviderId;
   label: string;
   shortLabel: string;
-  status: "ready" | "planned";
+  status: "ready" | "detected" | "planned";
   description: string;
 };
 
@@ -30,13 +30,20 @@ export const PROVIDER_META: Record<ProviderId, ProviderMeta> = {
     id: "opencode",
     label: "OpenCode",
     shortLabel: "opencode",
-    status: "planned",
-    description: "OpenCode CLI wrapper. Planned.",
+    status: "detected",
+    description: "Shown only when the local opencode CLI reports connected providers.",
+  },
+  cursor: {
+    id: "cursor",
+    label: "Cursor CLI",
+    shortLabel: "cursor",
+    status: "detected",
+    description: "Shown only when the local Cursor CLI agent command is installed and authenticated.",
   },
 };
 
 export function isReadyProvider(id: ProviderId): boolean {
-  return PROVIDER_META[id].status === "ready";
+  return PROVIDER_META[id].status === "ready" || PROVIDER_META[id].status === "detected";
 }
 
 /**
@@ -57,13 +64,112 @@ export type ModelInfo = {
   provider: ProviderId;
   displayName: string;
   description: string;
-  context: 200_000 | 1_000_000;
+  context: number;
   supportsEffort: boolean;
   supportedEffortLevels: EffortLevel[];
   supportsAdaptiveThinking: boolean;
 };
 
+export type OpenCodeAgentInfo = {
+  name: string;
+  displayName: string;
+  description?: string;
+};
+
+export type OpenCodeCatalog = {
+  checkedAt: number | null;
+  installed: boolean;
+  available: boolean;
+  connectedProviderIds: string[];
+  models: ModelInfo[];
+  agents: OpenCodeAgentInfo[];
+  error?: string;
+};
+
+export type CursorCatalog = {
+  checkedAt: number | null;
+  installed: boolean;
+  available: boolean;
+  models: ModelInfo[];
+  status?: string;
+  error?: string;
+};
+
+export type ProviderCatalog = {
+  opencode: OpenCodeCatalog;
+  cursor?: CursorCatalog;
+};
+
+export type ProviderCatalogResponse =
+  | { ok: true; catalog: ProviderCatalog }
+  | { ok: false; catalog: ProviderCatalog; error: string };
+
+export type ProviderModelPreferences = {
+  favoriteModels: string[];
+  hiddenModels: string[];
+  customModels: string[];
+};
+
+export type ModelPreferencesByProvider = Partial<Record<ProviderId, ProviderModelPreferences>>;
+
+export type ProviderRuntimeConfig = {
+  /**
+   * CLI executable or absolute path used for this provider. Examples:
+   * "codex", "claude", "opencode", "agent", or "C:\\tools\\agent.exe".
+   */
+  binaryPath?: string;
+  /** Provider-specific home/config directory. Used by Claude and Codex. */
+  homePath?: string;
+  /** Account-specific Codex home that overrides CODEX_HOME for this provider. */
+  shadowHomePath?: string;
+  /** Additional Claude CLI launch arguments for Agent SDK hosts that support them. */
+  launchArgs?: string;
+  /** Existing OpenCode server URL. Blank means debase starts a local server. */
+  serverUrl?: string;
+  /** Password for an existing OpenCode server. */
+  serverPassword?: string;
+  /** Cursor API endpoint override. */
+  apiEndpoint?: string;
+};
+
+export type ProviderRuntimeSettings = Partial<Record<ProviderId, ProviderRuntimeConfig>>;
+
+export type ProviderCatalogRequest = {
+  runtime?: ProviderRuntimeSettings;
+  cwd?: string;
+};
+
+export const DEFAULT_PROVIDER_RUNTIME_SETTINGS: ProviderRuntimeSettings = {
+  claude: { binaryPath: "claude", homePath: "", launchArgs: "" },
+  codex: { binaryPath: "codex", homePath: "", shadowHomePath: "" },
+  opencode: { binaryPath: "opencode", serverUrl: "", serverPassword: "" },
+  cursor: { binaryPath: "agent", apiEndpoint: "" },
+};
+
+export const EMPTY_PROVIDER_CATALOG: ProviderCatalog = {
+  opencode: {
+    checkedAt: null,
+    installed: false,
+    available: false,
+    connectedProviderIds: [],
+    models: [],
+    agents: [],
+  },
+  cursor: {
+    checkedAt: null,
+    installed: false,
+    available: false,
+    models: [],
+  },
+};
+
 export const UNIVERSAL_EFFORTS: EffortLevel[] = ["low", "medium", "high"];
+
+export const EMPTY_MODEL_PREFERENCES: ProviderModelPreferences = {
+  favoriteModels: [],
+  hiddenModels: [],
+  customModels: [],
+};
 
 export const MODELS: ModelInfo[] = [
   {
@@ -178,16 +284,100 @@ export const MODELS: ModelInfo[] = [
   },
 ];
 
-export function findModel(id: string): ModelInfo | undefined {
-  return MODELS.find((m) => m.value === id);
+export const CURSOR_MODELS: ModelInfo[] = [
+  {
+    value: "auto",
+    provider: "cursor",
+    displayName: "Auto",
+    description: "Cursor chooses the model from the user's CLI account.",
+    context: 200_000,
+    supportsEffort: false,
+    supportedEffortLevels: UNIVERSAL_EFFORTS,
+    supportsAdaptiveThinking: false,
+  },
+  {
+    value: "gpt-5.2",
+    provider: "cursor",
+    displayName: "GPT-5.2",
+    description: "Cursor CLI model slug from the user's Cursor account.",
+    context: 200_000,
+    supportsEffort: false,
+    supportedEffortLevels: UNIVERSAL_EFFORTS,
+    supportsAdaptiveThinking: false,
+  },
+  {
+    value: "sonnet-4.5-thinking",
+    provider: "cursor",
+    displayName: "Sonnet 4.5 Thinking",
+    description: "Cursor CLI model slug from the user's Cursor account.",
+    context: 200_000,
+    supportsEffort: false,
+    supportedEffortLevels: UNIVERSAL_EFFORTS,
+    supportsAdaptiveThinking: false,
+  },
+];
+
+export function findModel(
+  id: string,
+  catalog?: ProviderCatalog,
+  preferences?: ModelPreferencesByProvider,
+): ModelInfo | undefined {
+  return allModels(catalog, preferences).find((m) => m.value === id);
 }
 
-export function modelsForProvider(provider: ProviderId): ModelInfo[] {
-  return MODELS.filter((m) => m.provider === provider);
+export function modelsForProvider(
+  provider: ProviderId,
+  catalog?: ProviderCatalog,
+  preferences?: ModelPreferencesByProvider,
+): ModelInfo[] {
+  const prefs = modelPreferencesForProvider(preferences, provider);
+  const hidden = new Set(prefs.hiddenModels);
+  const builtIn =
+    provider === "opencode"
+      ? (catalog?.opencode.models ?? [])
+      : provider === "cursor"
+        ? (catalog?.cursor?.available ? catalog.cursor.models : [])
+      : MODELS.filter((m) => m.provider === provider);
+  const visibleBuiltIns = builtIn.filter((m) => !hidden.has(m.value));
+  if (provider === "opencode" || provider === "cursor") {
+    return sortModelsForPreferences(visibleBuiltIns, prefs);
+  }
+  const builtInValues = new Set(builtIn.map((m) => m.value));
+  const custom = prefs.customModels
+    .map(normalizeCustomModelSlug)
+    .filter((slug): slug is string => slug !== null && !builtInValues.has(slug))
+    .map((slug) => customModelInfo(provider, slug));
+  return sortModelsForPreferences([...visibleBuiltIns, ...custom], prefs);
 }
 
-export function defaultModelForProvider(provider: ProviderId): ModelInfo {
-  return modelsForProvider(provider)[0] ?? MODELS[0]!;
+export function defaultModelForProvider(
+  provider: ProviderId,
+  catalog?: ProviderCatalog,
+  preferences?: ModelPreferencesByProvider,
+): ModelInfo {
+  const visible = modelsForProvider(provider, catalog, preferences);
+  if (visible[0]) return visible[0];
+  const unfiltered =
+    provider === "opencode"
+      ? (catalog?.opencode.models ?? [])
+      : provider === "cursor"
+        ? (catalog?.cursor?.models.length ? catalog.cursor.models : CURSOR_MODELS)
+      : MODELS.filter((model) => model.provider === provider);
+  return unfiltered[0] ?? MODELS[0]!;
+}
+
+export function allModels(
+  catalog?: ProviderCatalog,
+  preferences?: ModelPreferencesByProvider,
+): ModelInfo[] {
+  return PROVIDERS.flatMap((provider) => modelsForProvider(provider, catalog, preferences));
+}
+
+export function providerAvailable(provider: ProviderId, catalog?: ProviderCatalog): boolean {
+  if (!isReadyProvider(provider)) return false;
+  if (provider === "opencode") return catalog?.opencode.available === true;
+  if (provider === "cursor") return catalog?.cursor?.available === true;
+  return true;
 }
 
 /**
@@ -196,4 +386,68 @@ export function defaultModelForProvider(provider: ProviderId): ModelInfo {
  */
 export function modelSupports1MBeta(modelId: string): boolean {
   return modelId.startsWith("claude-sonnet-4");
+}
+
+export function modelPreferencesForProvider(
+  preferences: ModelPreferencesByProvider | undefined,
+  provider: ProviderId,
+): ProviderModelPreferences {
+  const raw = preferences?.[provider];
+  return {
+    favoriteModels: normalizeModelList(raw?.favoriteModels),
+    hiddenModels: normalizeModelList(raw?.hiddenModels),
+    customModels: normalizeModelList(raw?.customModels),
+  };
+}
+
+export function normalizeCustomModelSlug(value: string): string | null {
+  const slug = value.trim();
+  if (!slug || slug.length > 160 || /\s/.test(slug)) return null;
+  return slug;
+}
+
+export function isCustomModelAllowed(provider: ProviderId, model: string): boolean {
+  return provider !== "opencode" && provider !== "cursor" && normalizeCustomModelSlug(model) !== null;
+}
+
+function normalizeModelList(values: string[] | undefined): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values ?? []) {
+    if (typeof value !== "string") continue;
+    const normalized = normalizeCustomModelSlug(value);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    out.push(normalized);
+  }
+  return out;
+}
+
+function customModelInfo(provider: ProviderId, slug: string): ModelInfo {
+  return {
+    value: slug,
+    provider,
+    displayName: slug,
+    description: "User-added custom model slug.",
+    context: 200_000,
+    supportsEffort: true,
+    supportedEffortLevels: UNIVERSAL_EFFORTS,
+    supportsAdaptiveThinking: provider === "claude",
+  };
+}
+
+function sortModelsForPreferences(
+  models: ModelInfo[],
+  preferences: ProviderModelPreferences,
+): ModelInfo[] {
+  const favorite = new Set(preferences.favoriteModels);
+  return models
+    .map((model, index) => ({ model, index }))
+    .sort((a, b) => {
+      const af = favorite.has(a.model.value);
+      const bf = favorite.has(b.model.value);
+      if (af !== bf) return af ? -1 : 1;
+      return a.index - b.index;
+    })
+    .map((entry) => entry.model);
 }

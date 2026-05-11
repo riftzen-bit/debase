@@ -6,7 +6,17 @@ import {
   type Thread,
 } from "../state/types";
 import type { ServiceTier } from "@shared/chat";
-import { defaultModelForProvider, findModel, isReadyProvider, type ProviderId } from "@shared/providers";
+import {
+  DEFAULT_PROVIDER_RUNTIME_SETTINGS,
+  defaultModelForProvider,
+  findModel,
+  isReadyProvider,
+  modelPreferencesForProvider,
+  PROVIDERS,
+  type ModelPreferencesByProvider,
+  type ProviderId,
+  type ProviderRuntimeSettings,
+} from "@shared/providers";
 import { newId } from "./id";
 
 const KEY_V1 = "debase.state.v1";
@@ -55,31 +65,73 @@ export function save(value: AppState): void {
 
 function reconcile(parsed: Partial<AppState>): AppState {
   const projects = Array.isArray(parsed.projects) ? parsed.projects : [];
+  const settings: AppState["settings"] = {
+    defaults: repairRunConfig(
+      parsed.settings?.defaults,
+      repairModelPreferences(parsed.settings?.modelPreferences),
+    ),
+    enabledProviders: {
+      ...DEFAULT_SETTINGS.enabledProviders,
+      ...(parsed.settings?.enabledProviders ?? {}),
+    },
+    modelPreferences: repairModelPreferences(parsed.settings?.modelPreferences),
+    providerRuntime: repairProviderRuntime(parsed.settings?.providerRuntime),
+    editorCommand:
+      typeof parsed.settings?.editorCommand === "string"
+        ? parsed.settings.editorCommand
+        : DEFAULT_SETTINGS.editorCommand,
+    askBeforeTools:
+      typeof parsed.settings?.askBeforeTools === "boolean"
+        ? parsed.settings.askBeforeTools
+        : DEFAULT_SETTINGS.askBeforeTools,
+  };
   return {
-    projects: projects.map(repairProject),
+    projects: projects.map((project) => repairProject(project, settings.modelPreferences)),
     selectedProjectId: typeof parsed.selectedProjectId === "string" ? parsed.selectedProjectId : null,
     selectedThreadId: typeof parsed.selectedThreadId === "string" ? parsed.selectedThreadId : null,
-    settings: {
-      defaults: repairRunConfig(parsed.settings?.defaults),
-      enabledProviders: {
-        ...DEFAULT_SETTINGS.enabledProviders,
-        ...(parsed.settings?.enabledProviders ?? {}),
-      },
-      editorCommand:
-        typeof parsed.settings?.editorCommand === "string"
-          ? parsed.settings.editorCommand
-          : DEFAULT_SETTINGS.editorCommand,
-      askBeforeTools:
-        typeof parsed.settings?.askBeforeTools === "boolean"
-          ? parsed.settings.askBeforeTools
-          : DEFAULT_SETTINGS.askBeforeTools,
-    },
+    settings,
     pendings: {},
     pendingPermissions: {},
   };
 }
 
-function repairProject(raw: unknown): Project {
+function repairProviderRuntime(raw: unknown): ProviderRuntimeSettings {
+  const incoming = (raw ?? {}) as ProviderRuntimeSettings;
+  const out: ProviderRuntimeSettings = {};
+  for (const provider of PROVIDERS) {
+    const defaults = DEFAULT_PROVIDER_RUNTIME_SETTINGS[provider] ?? {};
+    const value = incoming[provider] ?? {};
+    out[provider] = {
+      ...defaults,
+      ...Object.fromEntries(
+        Object.entries(value).filter(([, entry]) => typeof entry === "string"),
+      ),
+    };
+  }
+  return out;
+}
+
+function repairModelPreferences(raw: unknown): ModelPreferencesByProvider {
+  const incoming = (raw ?? {}) as ModelPreferencesByProvider;
+  const out: ModelPreferencesByProvider = {};
+  for (const provider of PROVIDERS) {
+    const prefs = modelPreferencesForProvider(incoming, provider);
+    if (
+      prefs.favoriteModels.length === 0 &&
+      prefs.hiddenModels.length === 0 &&
+      prefs.customModels.length === 0
+    ) {
+      continue;
+    }
+    out[provider] =
+      provider === "opencode" || provider === "cursor"
+        ? { ...prefs, customModels: [] }
+        : prefs;
+  }
+  return out;
+}
+
+function repairProject(raw: unknown, preferences?: ModelPreferencesByProvider): Project {
   const p = raw as Project;
   return {
     id: p.id ?? newId("prj"),
@@ -88,11 +140,11 @@ function repairProject(raw: unknown): Project {
     createdAt: p.createdAt ?? Date.now(),
     updatedAt: p.updatedAt ?? Date.now(),
     expanded: p.expanded ?? true,
-    threads: Array.isArray(p.threads) ? p.threads.map(repairThread) : [],
+    threads: Array.isArray(p.threads) ? p.threads.map((thread) => repairThread(thread, preferences)) : [],
   };
 }
 
-function repairThread(raw: unknown): Thread {
+function repairThread(raw: unknown, preferences?: ModelPreferencesByProvider): Thread {
   const t = raw as Thread;
   const incoming = (t.runConfig ?? {}) as Partial<Thread["runConfig"]>;
   // Earlier builds carried mode='full-access'. Migrate it onto the new
@@ -110,8 +162,9 @@ function repairThread(raw: unknown): Thread {
     createdAt: t.createdAt ?? Date.now(),
     updatedAt: t.updatedAt ?? Date.now(),
     sessionId: t.sessionId ?? null,
+    worktreePath: typeof t.worktreePath === "string" ? t.worktreePath : null,
     archivedAt: typeof t.archivedAt === "number" ? t.archivedAt : null,
-    runConfig: repairRunConfig({ ...incoming, mode, fullAccess }),
+    runConfig: repairRunConfig({ ...incoming, mode, fullAccess }, preferences),
     messages: Array.isArray(t.messages)
       ? t.messages.map((m) => {
           if (m.role === "assistant" && m.status === "streaming") {
@@ -127,15 +180,24 @@ function repairThread(raw: unknown): Thread {
   };
 }
 
-function repairRunConfig(raw: unknown): Thread["runConfig"] {
+function repairRunConfig(
+  raw: unknown,
+  preferences?: ModelPreferencesByProvider,
+): Thread["runConfig"] {
   const incoming = (raw ?? {}) as Partial<Thread["runConfig"]>;
-  const model = typeof incoming.model === "string" ? findModel(incoming.model) : undefined;
+  const model =
+    typeof incoming.model === "string" ? findModel(incoming.model, undefined, preferences) : undefined;
   const provider =
     typeof incoming.provider === "string" && isReadyProvider(incoming.provider as ProviderId)
       ? (incoming.provider as ProviderId)
       : (model?.provider ?? DEFAULT_RUN_CONFIG.provider);
-  const fallbackModel = defaultModelForProvider(provider);
-  const nextModel = model?.provider === provider ? model.value : fallbackModel.value;
+  const fallbackModel = defaultModelForProvider(provider, undefined, preferences);
+  const nextModel =
+    model?.provider === provider
+      ? model.value
+      : provider === "opencode" && typeof incoming.model === "string"
+        ? incoming.model
+        : fallbackModel.value;
   const serviceTier: ServiceTier = incoming.serviceTier === "fast" ? "fast" : "standard";
   return {
     ...DEFAULT_RUN_CONFIG,
@@ -188,6 +250,7 @@ function migrateFromV1(v1: V1State): AppState {
           createdAt: t.createdAt,
           updatedAt: t.updatedAt,
           sessionId: t.sessionId,
+          worktreePath: null,
           archivedAt: null,
           runConfig: DEFAULT_RUN_CONFIG,
           // Same streaming->error repair as repairThread. Without this the v1

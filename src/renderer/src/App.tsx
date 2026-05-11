@@ -5,6 +5,8 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ComposeIcon,
+  DiffIcon,
+  EyeIcon,
   FolderPlusIcon,
   GearIcon,
   SearchIcon,
@@ -12,11 +14,15 @@ import {
 } from "./components/icons";
 import { Sidebar } from "./components/Sidebar";
 import { Settings, type SettingsCategory } from "./components/Settings";
+import { isTerminalEventTarget } from "./components/TerminalDrawer";
 import { TitleBar } from "./components/TitleBar";
 import { CommandPalette, type PaletteAction } from "./components/CommandPalette";
+import { CloneProjectDialog } from "./components/CloneProjectDialog";
 import { StoreProvider, useStore } from "./state/store";
-import { KeybindingsProvider, useShortcutOverrides } from "./state/keybindings";
-import { effectiveKey, matchesKey } from "./lib/shortcuts";
+import { KeybindingsProvider, useCommandForEvent } from "./state/keybindings";
+import { matchesKey } from "./lib/shortcuts";
+import { threadCwd } from "./lib/workdir";
+import type { ReadScriptsResponse } from "@shared/chat";
 
 export function App() {
   return (
@@ -29,6 +35,15 @@ export function App() {
 }
 
 type View = "chat" | "settings";
+
+type ScriptPaletteState =
+  | { kind: "idle" | "loading" }
+  | {
+      kind: "loaded";
+      manager: "bun" | "npm" | "pnpm" | "yarn";
+      scripts: { name: string; command: string }[];
+    }
+  | { kind: "error"; message: string };
 
 const SIDEBAR_WIDTH_KEY = "debase.sidebar.width";
 const SIDEBAR_HIDDEN_KEY = "debase.sidebar.hidden";
@@ -57,15 +72,20 @@ function Shell() {
     state,
     cancelPrompt,
     setThreadArchived,
+    selectProject,
     selectThread,
     newThread,
     newProject,
+    sendPrompt,
+    enqueuePrompt,
   } = useStore();
-  const overrides = useShortcutOverrides();
+  const commandForEvent = useCommandForEvent();
 
   const [view, setView] = useState<View>("chat");
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory>("general");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [cloneDialogOpen, setCloneDialogOpen] = useState(false);
+  const [scriptState, setScriptState] = useState<ScriptPaletteState>({ kind: "idle" });
 
   const openSettings = useCallback((category?: SettingsCategory) => {
     if (category) setSettingsCategory(category);
@@ -109,6 +129,27 @@ function Shell() {
   const selectedProjectId = state.selectedProjectId;
   const projects = state.projects;
   const pendings = state.pendings;
+  const selectedProject = useMemo(
+    () => projects.find((p) => p.id === selectedProjectId) ?? null,
+    [projects, selectedProjectId],
+  );
+  const selectedThread = useMemo(() => {
+    if (!selectedThreadId) return null;
+    for (const project of projects) {
+      const thread = project.threads.find((t) => t.id === selectedThreadId);
+      if (thread) return thread;
+    }
+    return null;
+  }, [projects, selectedThreadId]);
+  const selectedThreadProject = useMemo(() => {
+    if (!selectedThreadId) return null;
+    return projects.find((p) => p.threads.some((t) => t.id === selectedThreadId)) ?? null;
+  }, [projects, selectedThreadId]);
+  const activeProject = selectedThreadProject ?? selectedProject;
+  const activeCwd =
+    activeProject && selectedThread
+      ? threadCwd(activeProject, selectedThread)
+      : (selectedProject?.path ?? "");
 
   const switchThread = useCallback(
     (delta: number) => {
@@ -130,7 +171,9 @@ function Shell() {
   // `userData/keybindings.json` take precedence over the default specs.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (matchesKey(e, effectiveKey("palette", "mod+k", overrides))) {
+      const terminalFocus = isTerminalEventTarget(e.target);
+      const command = commandForEvent(e, { terminalFocus });
+      if (command === "commandPalette.toggle") {
         e.preventDefault();
         e.stopPropagation();
         setPaletteOpen((v) => !v);
@@ -146,26 +189,57 @@ function Shell() {
         setPaletteOpen((v) => !v);
         return;
       }
-      if (matchesKey(e, effectiveKey("settings", "mod+,", overrides))) {
+      if (command === "settings.toggle") {
         e.preventDefault();
         e.stopPropagation();
         setView((v) => (v === "settings" ? "chat" : "settings"));
         return;
       }
-      if (matchesKey(e, effectiveKey("shortcuts", "mod+/", overrides))) {
+      if (command === "shortcuts.open") {
         e.preventDefault();
         e.stopPropagation();
         setSettingsCategory("shortcuts");
         setView("settings");
         return;
       }
-      if (matchesKey(e, effectiveKey("sidebar", "mod+b", overrides))) {
+      if (command === "sidebar.toggle") {
         e.preventDefault();
         e.stopPropagation();
         setSidebarHidden((v) => !v);
         return;
       }
-      if (matchesKey(e, effectiveKey("stop", "mod+.", overrides))) {
+      if (command === "chat.new") {
+        if (terminalFocus) return;
+        const id = selectedProjectId ?? projects[0]?.id ?? null;
+        if (id) {
+          e.preventDefault();
+          e.stopPropagation();
+          newThread(id);
+        }
+        return;
+      }
+      if (command === "editor.openFavorite") {
+        if (terminalFocus || isEditableTarget(e.target)) return;
+        if (activeCwd) {
+          e.preventDefault();
+          e.stopPropagation();
+          void window.api.shell.openInEditor({
+            path: activeCwd,
+            editorCommand: state.settings.editorCommand ?? "",
+          });
+        }
+        return;
+      }
+      if (command === "modelPicker.toggle") {
+        if (terminalFocus) return;
+        if (selectedThreadId) {
+          e.preventDefault();
+          e.stopPropagation();
+          window.dispatchEvent(new CustomEvent("debase:toggle-model-picker"));
+        }
+        return;
+      }
+      if (command === "chat.stop") {
         if (selectedThreadId && pendings[selectedThreadId]) {
           e.preventDefault();
           e.stopPropagation();
@@ -173,7 +247,8 @@ function Shell() {
         }
         return;
       }
-      if (matchesKey(e, effectiveKey("archiveThread", "mod+w", overrides))) {
+      if (command === "chat.archive") {
+        if (terminalFocus) return;
         if (selectedThreadId) {
           e.preventDefault();
           e.stopPropagation();
@@ -181,13 +256,11 @@ function Shell() {
         }
         return;
       }
-      const altUp = effectiveKey("prevThread", "alt+arrowup", overrides);
-      const altDown = effectiveKey("nextThread", "alt+arrowdown", overrides);
-      if (matchesKey(e, altUp) || matchesKey(e, altDown)) {
+      if (command === "thread.previous" || command === "thread.next") {
         if (isEditableTarget(e.target)) return;
         e.preventDefault();
         e.stopPropagation();
-        switchThread(matchesKey(e, altUp) ? -1 : 1);
+        switchThread(command === "thread.previous" ? -1 : 1);
         return;
       }
       if (e.key === "Escape") {
@@ -209,23 +282,96 @@ function Shell() {
     return () => window.removeEventListener("keydown", onKey, true);
   }, [
     selectedThreadId,
+    selectedProjectId,
+    projects,
     pendings,
     cancelPrompt,
     setThreadArchived,
+    newThread,
     switchThread,
     paletteOpen,
-    overrides,
+    commandForEvent,
+    activeCwd,
+    state.settings.editorCommand,
   ]);
+
+  useEffect(() => {
+    if (!activeCwd || !paletteOpen) {
+      setScriptState({ kind: "idle" });
+      return;
+    }
+    let cancelled = false;
+    setScriptState({ kind: "loading" });
+    void window.api.project
+      .readScripts({ projectPath: activeCwd })
+      .then((res: ReadScriptsResponse) => {
+        if (cancelled) return;
+        if (res.ok) {
+          setScriptState({
+            kind: "loaded",
+            manager: res.manager,
+            scripts: res.scripts,
+          });
+        } else {
+          setScriptState({ kind: "error", message: res.error });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCwd, paletteOpen]);
 
   const paletteActions = useMemo<PaletteAction[]>(() => {
     const projectId = selectedProjectId ?? projects[0]?.id ?? null;
     const hasPending = selectedThreadId ? pendings[selectedThreadId] != null : false;
+    const navigationActions: PaletteAction[] = [];
+    for (const project of projects) {
+      navigationActions.push({
+        id: `project:${project.id}`,
+        label: `Open project: ${project.name}`,
+        hint: project.path || "No path",
+        icon: <FolderPlusIcon size={13} />,
+        onSelect: () => {
+          selectProject(project.id);
+          setView("chat");
+        },
+      });
+      for (const thread of project.threads.filter((t) => !t.archivedAt)) {
+        navigationActions.push({
+          id: `thread:${thread.id}`,
+          label: `Open thread: ${thread.title}`,
+          hint: project.name,
+          icon: <ComposeIcon size={13} />,
+          onSelect: () => {
+            selectThread(thread.id);
+            setView("chat");
+          },
+        });
+      }
+    }
+
+    const scriptActions: PaletteAction[] =
+      scriptState.kind === "loaded" && selectedThread
+        ? scriptState.scripts.map((script) => ({
+            id: `script:${script.name}`,
+            label: `Run script: ${scriptState.manager} run ${script.name}`,
+            hint: script.command,
+            icon: <StopIcon size={13} />,
+            onSelect: () => {
+              const cmd = `${scriptState.manager} run ${script.name}`;
+              const text = `Run \`${cmd}\` and share what happened.`;
+              if (pendings[selectedThread.id]) enqueuePrompt(text, selectedThread.id);
+              else void sendPrompt(text, selectedThread.id);
+            },
+          }))
+        : [];
+
     return [
       {
         id: "newThread",
         label: "New thread",
         hint: "In current project",
-        keys: "mod+shift+n",
+        keys: "mod+n",
         icon: <ComposeIcon size={13} />,
         disabled: !projectId,
         onSelect: () => {
@@ -240,6 +386,40 @@ function Shell() {
         onSelect: async () => {
           const result = await window.api.dialog.chooseDirectory();
           if (result.ok) newProject(deriveName(result.path), result.path);
+        },
+      },
+      {
+        id: "cloneProject",
+        label: "Clone Git repository…",
+        hint: "Paste a Git URL, choose a destination, then add the checkout",
+        icon: <FolderPlusIcon size={13} />,
+        onSelect: () => {
+          setCloneDialogOpen(true);
+        },
+      },
+      {
+        id: "openCwd",
+        label: "Open current working directory",
+        hint: activeCwd || "No working directory selected",
+        icon: <FolderPlusIcon size={13} />,
+        disabled: !activeCwd,
+        onSelect: () => {
+          if (activeCwd) void window.api.shell.openPath(activeCwd);
+        },
+      },
+      {
+        id: "openEditor",
+        label: "Open current project in editor",
+        hint: activeCwd || "Configure an editor command in Settings",
+        keys: "mod+o",
+        icon: <GearIcon size={13} />,
+        disabled: !activeCwd,
+        onSelect: () => {
+          if (!activeCwd) return;
+          void window.api.shell.openInEditor({
+            path: activeCwd,
+            editorCommand: state.settings.editorCommand ?? "",
+          });
         },
       },
       {
@@ -285,6 +465,38 @@ function Shell() {
         onSelect: () => setSidebarHidden((v) => !v),
       },
       {
+        id: "diff",
+        label: "Toggle diff panel",
+        hint: activeCwd || "No working directory selected",
+        keys: "mod+d",
+        icon: <DiffIcon size={13} />,
+        disabled: !activeCwd,
+        onSelect: () => {
+          window.dispatchEvent(new CustomEvent("debase:toggle-diff"));
+        },
+      },
+      {
+        id: "planSidebar",
+        label: "Toggle plan panel",
+        hint: selectedThread ? "Latest plan-mode response" : "No thread selected",
+        keys: "mod+shift+l",
+        icon: <EyeIcon size={13} />,
+        disabled: !selectedThread,
+        onSelect: () => {
+          window.dispatchEvent(new CustomEvent("debase:toggle-plan"));
+        },
+      },
+      {
+        id: "modelPicker",
+        label: "Toggle model picker",
+        hint: selectedThread ? "Current thread" : "No thread selected",
+        keys: "mod+shift+m",
+        disabled: !selectedThread,
+        onSelect: () => {
+          window.dispatchEvent(new CustomEvent("debase:toggle-model-picker"));
+        },
+      },
+      {
         id: "settings",
         label: "Open settings",
         keys: "mod+,",
@@ -292,19 +504,58 @@ function Shell() {
         onSelect: () => openSettings("general"),
       },
       {
+        id: "settings.providers",
+        label: "Open provider settings",
+        hint: "Models, runtime paths, and local CLI status",
+        icon: <GearIcon size={13} />,
+        onSelect: () => openSettings("providers"),
+      },
+      {
+        id: "settings.source-control",
+        label: "Open source control settings",
+        hint: "Git remotes and provider auth",
+        icon: <DiffIcon size={13} />,
+        onSelect: () => openSettings("source-control"),
+      },
+      {
         id: "shortcuts",
         label: "Show keyboard shortcuts",
         keys: "mod+/",
+        icon: <SearchIcon size={13} />,
         onSelect: () => openSettings("shortcuts"),
       },
+      {
+        id: "settings.archived",
+        label: "Open archived threads",
+        hint: "Restore or delete archived conversations",
+        icon: <ArchiveIcon size={13} />,
+        onSelect: () => openSettings("archived"),
+      },
+      {
+        id: "settings.diagnostics",
+        label: "Open diagnostics",
+        hint: "Provider catalog, skills, source control, and keybindings",
+        icon: <SearchIcon size={13} />,
+        onSelect: () => openSettings("diagnostics"),
+      },
+      ...scriptActions,
+      ...navigationActions,
     ];
   }, [
     selectedProjectId,
     projects,
     selectedThreadId,
     pendings,
+    activeCwd,
+    selectedThread,
+    scriptState,
+    state.settings.editorCommand,
+    selectProject,
+    selectThread,
     newThread,
     newProject,
+    sendPrompt,
+    enqueuePrompt,
     cancelPrompt,
     setThreadArchived,
     openSettings,
@@ -324,12 +575,10 @@ function Shell() {
         sidebarHidden={effectiveSidebarHidden}
       />
       <div className="grid min-h-0 overflow-hidden" style={gridStyle}>
-        <div
-          className={`relative border-r border-rule overflow-hidden ${
-            effectiveSidebarHidden ? "pointer-events-none invisible" : ""
-          }`}
-        >
-          <Sidebar onOpenSettings={() => openSettings()} settingsActive={view === "settings"} />
+        <div className="relative overflow-hidden border-r border-rule">
+          {!effectiveSidebarHidden && (
+            <Sidebar onOpenSettings={() => openSettings()} settingsActive={view === "settings"} />
+          )}
           {!effectiveSidebarHidden && (
             <SidebarResizeHandle
               width={sidebarWidth}
@@ -356,7 +605,10 @@ function Shell() {
               onCategoryChange={setSettingsCategory}
             />
           ) : (
-            <ChatPanel onOpenSettings={() => openSettings()} />
+            <ChatPanel
+              onOpenSettings={() => openSettings()}
+              onOpenCloneProject={() => setCloneDialogOpen(true)}
+            />
           )}
         </div>
       </div>
@@ -364,6 +616,11 @@ function Shell() {
         open={paletteOpen}
         onClose={() => setPaletteOpen(false)}
         actions={paletteActions}
+      />
+      <CloneProjectDialog
+        open={cloneDialogOpen}
+        onClose={() => setCloneDialogOpen(false)}
+        onCloned={newProject}
       />
     </div>
   );

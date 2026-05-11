@@ -1,4 +1,4 @@
-import type { ProviderId } from "./providers";
+import type { ProviderId, ProviderRuntimeSettings } from "./providers";
 
 export type ChatEvent =
   | { kind: "session_init"; sessionId: string; model: string; tools: string[] }
@@ -6,6 +6,17 @@ export type ChatEvent =
   | { kind: "thinking"; text: string }
   | { kind: "tool_use"; id: string; name: string; input: unknown }
   | { kind: "tool_result"; toolUseId: string; output: string; isError: boolean }
+  | {
+      kind: "user_input_request";
+      requestId: string;
+      questions: UserInputQuestion[];
+    }
+  | {
+      kind: "user_input_resolved";
+      requestId: string;
+      answers: Record<string, string[]>;
+      rejected: boolean;
+    }
   | {
       kind: "permission_request";
       /** Unique id used to correlate the renderer's allow/deny response. */
@@ -35,6 +46,21 @@ export type ChatEvent =
 export type PermissionResponseRequest = {
   permId: string;
   decision: "allow" | "deny";
+};
+
+export type UserInputQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  options: { label: string; description?: string }[];
+  multiSelect?: boolean;
+  custom?: boolean;
+};
+
+export type UserInputResponseRequest = {
+  requestId: string;
+  answers: Record<string, string[]>;
+  reject?: boolean;
 };
 
 export type ChatEventEnvelope = {
@@ -72,6 +98,12 @@ export type RunConfig = {
    * Codex CLI's `/fast on` behavior.
    */
   serviceTier: ServiceTier;
+  /**
+   * OpenCode-only agent name from the local OpenCode agent catalog.
+   * Undefined preserves the default OpenCode behavior; plan mode still maps
+   * to the built-in plan agent when no explicit agent is selected.
+   */
+  opencodeAgent?: string;
 };
 
 /**
@@ -104,6 +136,7 @@ export type SendPromptRequest = {
   cwd?: string;
   resumeSessionId?: string | null;
   runConfig: RunConfig;
+  providerRuntime?: ProviderRuntimeSettings;
   /**
    * When true the SDK gates each tool call through `canUseTool`, which we
    * bridge to the renderer over IPC so the user can allow/deny inline. False
@@ -178,6 +211,154 @@ export type ReadScriptsResponse =
     }
   | { ok: false; error: string };
 
+export type WriteProjectFileRequest = {
+  projectPath: string;
+  /** Relative path inside projectPath. Absolute paths and parent traversal are rejected. */
+  relativePath: string;
+  contents: string;
+};
+
+export type WriteProjectFileResponse =
+  | { ok: true; path: string }
+  | { ok: false; error: string };
+
+export type ProjectFileSearchEntry = {
+  path: string;
+};
+
+export type ProjectSearchFilesRequest = {
+  projectPath: string;
+  query?: string;
+  limit?: number;
+};
+
+export type ProjectSearchFilesResponse =
+  | {
+      ok: true;
+      entries: ProjectFileSearchEntry[];
+      totalCount: number;
+    }
+  | { ok: false; error: string };
+
+export type ProjectSkillEntry = {
+  name: string;
+  displayName: string;
+  description?: string;
+  shortDescription?: string;
+  scope: "project" | "personal" | "app" | "system";
+  path: string;
+};
+
+export type ProjectListSkillsRequest = {
+  projectPath?: string;
+};
+
+export type ProjectListSkillsResponse =
+  | { ok: true; skills: ProjectSkillEntry[] }
+  | { ok: false; error: string };
+
+export type GitStatusRequest = {
+  projectPath: string;
+};
+
+export type GitStatusFile = {
+  path: string;
+  index: string;
+  worktree: string;
+};
+
+export type GitStatusResponse =
+  | {
+      ok: true;
+      isRepo: true;
+      branch: string | null;
+      upstream: string | null;
+      ahead: number;
+      behind: number;
+      staged: number;
+      unstaged: number;
+      untracked: number;
+      conflicted: number;
+      files: GitStatusFile[];
+    }
+  | { ok: true; isRepo: false }
+  | { ok: false; error: string };
+
+export type GitDiffRequest = {
+  projectPath: string;
+  /** Relative path from the project root. Omit for the whole working tree. */
+  filePath?: string;
+  /** When true, pass git's whitespace-insensitive diff flag. */
+  ignoreWhitespace?: boolean;
+};
+
+export type GitDiffResponse =
+  | { ok: true; diff: string }
+  | { ok: false; error: string };
+
+export type GitRef = {
+  name: string;
+  isRemote: boolean;
+  current: boolean;
+  isDefault: boolean;
+  worktreePath: string | null;
+};
+
+export type GitListRefsRequest = {
+  projectPath: string;
+  query?: string;
+  limit?: number;
+};
+
+export type GitListRefsResponse =
+  | {
+      ok: true;
+      isRepo: true;
+      refs: GitRef[];
+      totalCount: number;
+    }
+  | { ok: true; isRepo: false }
+  | { ok: false; error: string };
+
+export type GitCreateWorktreeRequest = {
+  projectPath: string;
+  branchName: string;
+  startPoint?: string;
+};
+
+export type GitCreateWorktreeResponse =
+  | { ok: true; branchName: string; worktreePath: string }
+  | { ok: false; error: string };
+
+export type GitRemoveWorktreeRequest = {
+  projectPath: string;
+  worktreePath: string;
+  force?: boolean;
+};
+
+export type GitRemoveWorktreeResponse =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export type GitSwitchRefRequest = {
+  projectPath: string;
+  refName: string;
+};
+
+export type GitSwitchRefResponse =
+  | { ok: true; refName: string | null }
+  | { ok: false; error: string };
+
+export type GitCreateRefRequest = {
+  projectPath: string;
+  refName: string;
+  switchRef?: boolean;
+};
+
+export type GitCreateRefResponse =
+  | { ok: true; refName: string }
+  | { ok: false; error: string };
+
 export type SaveImageRequest = {
   /** Base64 payload (no data:URL prefix). */
   base64: string;
@@ -190,11 +371,17 @@ export type SaveImageResponse =
   | { ok: false; error: string };
 
 export type KeybindingsLoadResponse =
-  | { ok: true; overrides: Record<string, string>; path: string }
+  | {
+      ok: true;
+      overrides: Record<string, string>;
+      rules: { key: string; command: string; when?: string }[];
+      path: string;
+    }
   | { ok: false; error: string; path: string };
 
 export type KeybindingsSaveRequest = {
   overrides: Record<string, string>;
+  rules?: { key: string; command: string; when?: string }[];
 };
 
 export type KeybindingsSaveResponse =

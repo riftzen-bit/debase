@@ -24,6 +24,8 @@ type Props = {
    * Minimum space (px) we want available on the preferred side before flipping.
    */
   minSpace?: number;
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 };
 
 export function Popover({
@@ -34,10 +36,21 @@ export function Popover({
   className,
   placement = "auto",
   minSpace = 240,
+  open: controlledOpen,
+  onOpenChange,
 }: Props) {
-  const [open, setOpen] = useState(false);
+  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
+  const open = controlledOpen ?? uncontrolledOpen;
+  const setOpen = (next: boolean | ((current: boolean) => boolean)) => {
+    const resolved = typeof next === "function" ? next(open) : next;
+    if (controlledOpen === undefined) setUncontrolledOpen(resolved);
+    onOpenChange?.(resolved);
+  };
   const [resolved, setResolved] = useState<"top" | "bottom">("bottom");
   const [resolvedAlign, setResolvedAlign] = useState<Align>(align);
+  const [horizontalStyle, setHorizontalStyle] = useState<React.CSSProperties>(
+    () => (typeof width === "number" ? { width } : {}),
+  );
   const wrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -55,12 +68,18 @@ export function Popover({
       setResolved(placement);
     }
 
-    // Alignment auto-flip: keep the popover inside the viewport by switching
-    // to the opposite side when the requested align would overflow.
+    // Keep the popover inside the viewport. Flipping start/end is enough for
+    // normal desktop menus; narrow captures need a clamped pixel offset.
     if (typeof width === "number") {
       const margin = 8;
-      const overflowRightWithStart = rect.left + width > window.innerWidth - margin;
-      const overflowLeftWithEnd = rect.right - width < margin;
+      const panelWidth = Math.min(width, Math.max(160, window.innerWidth - margin * 2));
+      const desiredLeft = align === "end" ? rect.right - panelWidth : rect.left;
+      const maxLeft = Math.max(margin, window.innerWidth - margin - panelWidth);
+      const clampedLeft = Math.min(Math.max(margin, desiredLeft), maxLeft);
+      setHorizontalStyle({ left: clampedLeft - rect.left, width: panelWidth });
+
+      const overflowRightWithStart = rect.left + panelWidth > window.innerWidth - margin;
+      const overflowLeftWithEnd = rect.right - panelWidth < margin;
       if (align === "start" && overflowRightWithStart) {
         setResolvedAlign("end");
       } else if (align === "end" && overflowLeftWithEnd) {
@@ -70,6 +89,7 @@ export function Popover({
       }
     } else {
       setResolvedAlign(align);
+      setHorizontalStyle({});
     }
   }, [open, placement, minSpace, align, width]);
 
@@ -112,9 +132,12 @@ export function Popover({
       {open && (
         <div
           className={`absolute z-40 max-h-[60vh] overflow-auto rounded-md border border-rule-strong bg-canvas py-1 shadow-md ${
-            resolvedAlign === "end" ? "right-0" : "left-0"
+            typeof width === "number" ? "" : resolvedAlign === "end" ? "right-0" : "left-0"
           } ${className ?? ""}`}
-          style={{ width: width === "auto" ? undefined : width, ...positionStyle }}
+          style={{
+            ...(width === "auto" ? {} : horizontalStyle),
+            ...positionStyle,
+          }}
         >
           {children({ close: () => setOpen(false) })}
         </div>

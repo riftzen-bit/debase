@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useStore } from "../state/store";
 import type { Project, Thread } from "../state/types";
 import type { ReadScriptsResponse } from "@shared/chat";
+import { threadCwd } from "../lib/workdir";
 import { MenuLabel, Popover } from "./Popover";
 import { ChevronDownIcon, PaperPlaneIcon } from "./icons";
 
@@ -22,17 +23,18 @@ export function ProjectScripts({ project, thread }: Props) {
   const [load, setLoad] = useState<LoadState>({ kind: "idle" });
   const [open, setOpen] = useState(false);
   const isPending = state.pendings[thread.id] != null;
+  const cwd = threadCwd(project, thread);
 
   useEffect(() => {
     if (!open) return;
-    if (!project.path) {
+    if (!cwd) {
       setLoad({ kind: "error", message: "Project has no working directory." });
       return;
     }
     let cancelled = false;
     setLoad({ kind: "loading" });
     void window.api.project
-      .readScripts({ projectPath: project.path })
+      .readScripts({ projectPath: cwd })
       .then((res: ReadScriptsResponse) => {
         if (cancelled) return;
         if (res.ok) {
@@ -44,9 +46,9 @@ export function ProjectScripts({ project, thread }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [open, project.path]);
+  }, [cwd, open]);
 
-  if (!project.path) return null;
+  if (!cwd) return null;
 
   const onRun = (script: Script) => {
     if (load.kind !== "loaded") return;

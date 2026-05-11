@@ -452,6 +452,18 @@ export function DiffIcon(props: IconProps) {
   );
 }
 
+export function GitBranchIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="4" cy="4" r="1.4" />
+      <circle cx="12" cy="4" r="1.4" />
+      <circle cx="4" cy="12" r="1.4" />
+      <path d="M4 5.4v5.2" />
+      <path d="M5.4 4h2.2A3.4 3.4 0 0 1 11 7.4v.2" />
+    </svg>
+  );
+}
+
 // File-type category glyphs. Hand-drawn 16×16 to match the rest of the icon
 // set. Used by `lib/fileIcons.ts` to render a tiny indicator next to file
 // rows in the Changed Files tree without resorting to a 1000-file vendored
@@ -473,6 +485,16 @@ export function CodeFileIcon(props: IconProps) {
       <path d="M4 2.5h6l2 2v9H4z" />
       <path d="M10 2.5v3h2" />
       <path d="m6 11-1.5-1.5L6 8M10 8l1.5 1.5L10 11" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+export function TerminalIcon(props: IconProps) {
+  return (
+    <svg {...base(props)} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M2.5 3.5h11v9h-11z" />
+      <path d="m5 6 2 2-2 2" />
+      <path d="M8.5 10h3" />
     </svg>
   );
 }

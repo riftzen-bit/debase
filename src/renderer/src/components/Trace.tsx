@@ -6,7 +6,7 @@ import { truncate } from "../lib/format";
 import { AgentIcon, CheckIcon, ChevronDownIcon, ChevronRightIcon, CloseIcon, SparkleIcon } from "./icons";
 import { tryRenderDiff } from "./DiffView";
 
-type OpBlock = Exclude<AssistantBlock, { kind: "text" }>;
+type OpBlock = Exclude<AssistantBlock, { kind: "text" | "user_input" }>;
 type ToolUseBlock = Extract<AssistantBlock, { kind: "tool_use" }>;
 
 type Props = {
@@ -393,6 +393,8 @@ function roleForProvider(provider: ProviderId): string {
       return "Codex";
     case "opencode":
       return "OpenCode";
+    case "cursor":
+      return "Cursor";
     case "claude":
     default:
       return "Claude";
